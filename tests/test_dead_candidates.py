@@ -289,6 +289,43 @@ class TestMarkDeadCandidates:
         mark_dead_candidates(G)
         assert not G.nodes["abap_cls_zcl_target"].get("dead_candidate")
 
+    def test_non_zcl_z_class_no_callers_marked(self):
+        """Class with Z prefix but without CL_ (e.g. ZORDER) must be marked as dead.
+
+        Previous regex required ZCL_/YCL_; classes named ZORDER, ZCALC, etc.
+        were silently skipped even if nobody calls them.
+        """
+        G = _make_graph([
+            {"id": "c1", "label": "CLASS ZORDER DEFINITION",
+             "source_file": "zorder.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["c1"].get("dead_candidate") is True
+
+    def test_non_zcl_z_method_no_callers_marked(self):
+        """Method on a non-CL class (e.g. ZORDER->PROCESS) must be marked as dead."""
+        G = _make_graph([
+            {"id": "m1", "label": "ZORDER->PROCESS",
+             "source_file": "zorder.abap", "source_location": "L10"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["m1"].get("dead_candidate") is True
+
+    def test_non_zcl_z_class_with_cross_edge_not_marked(self):
+        """Non-CL Z class with a cross-file caller must not be marked."""
+        G = _make_graph(
+            [
+                {"id": "c1", "label": "CLASS ZORDER DEFINITION",
+                 "source_file": "zorder.abap", "source_location": "L1"},
+                {"id": "c2", "label": "CLASS ZCL_FACTORY DEFINITION",
+                 "source_file": "factory.abap", "source_location": "L1"},
+            ],
+            [{"source": "c2", "target": "c1", "_src": "c2", "_tgt": "c1",
+              "relation": "uses"}],
+        )
+        mark_dead_candidates(G)
+        assert not G.nodes["c1"].get("dead_candidate")
+
 
 # ---------------------------------------------------------------------------
 # to_json hide_dead

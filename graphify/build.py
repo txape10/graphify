@@ -309,8 +309,8 @@ def mark_dead_candidates(G: nx.Graph) -> None:
     import re as _re
     from pathlib import Path as _Path
 
-    _Z_CLASS_RE = _re.compile(r"^CLASS\s+[ZY]CL_\w+\s+DEFINITION$", _re.IGNORECASE)
-    _Z_METHOD_RE = _re.compile(r"^[ZY]CL_\w+(?:->|=>)\w+$", _re.IGNORECASE)
+    _Z_CLASS_RE = _re.compile(r"^CLASS\s+[ZY]\w+\s+DEFINITION$", _re.IGNORECASE)
+    _Z_METHOD_RE = _re.compile(r"^[ZY]\w+(?:->|=>)\w+$", _re.IGNORECASE)
     _LOCAL_RE = _re.compile(r"^CLASS\s+(LCL_|MCL_)\w+", _re.IGNORECASE)
     _TEST_RE = _re.compile(r"(FOR\s+TESTING|_TEST\b|_UT\b)", _re.IGNORECASE)
 

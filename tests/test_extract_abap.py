@@ -253,3 +253,4 @@ def test_extract_abap_no_dangling_uses_edge_sources():
     for edge in result["edges"]:
         if edge["relation"] == "uses":
             assert edge["source"] in node_ids, f"Dangling uses source: {edge['source']}"
+
