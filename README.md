@@ -23,6 +23,8 @@
 > uv run graphify install --platform windows   # or --platform claude
 > ```
 >
+> 🇪🇸 [Versión en español](docs/translations/README.es-ES.md)
+>
 > Everything else below is the upstream graphify documentation.
 
 ---

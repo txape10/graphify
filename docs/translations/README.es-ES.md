@@ -1,3 +1,32 @@
+> **Nota del fork — soporte ABAP**
+> Este es un fork de [safishamsi/graphify](https://github.com/safishamsi/graphify) (rama `v8`) que añade ABAP como lenguaje extraíble.
+> Depende de un fork local de [kennyhml/tree-sitter-abap](https://github.com/kennyhml/tree-sitter-abap) en un directorio hermano.
+>
+> **Qué extrae de los ficheros `.abap`:**
+> - Nodos: clases (definiciones y referencias cruzadas de `ZCL_*`/`YCL_*`), métodos (de las definiciones presentes en el corpus), interfaces, FORMs, módulos de función, grupos de función, reports
+> - Edges: `calls` (método `->` instancia y `=>` estático, `CALL FUNCTION`, `PERFORM`); `uses` inferido (`TYPE REF TO`, `NEW`, `CREATE OBJECT`)
+> - Atributo de nodo `kind`: `z_custom` (prefijo Z/Y) vs `sap_standard` — filtra el grafo por titularidad
+>
+> **Detección de código muerto (ABAP):**
+> Los nodos con cero llamantes desde otros ficheros se marcan automáticamente como `dead_candidate: true`.
+> - `graphify cluster-only --hide-dead` — escribe `graph_full.json` (todos los nodos) y un `graph.json` filtrado sin candidatos muertos
+> - `graphify extract <ruta> --hide-dead` — igual para extracción completa
+> - `graphify query "..." --no-dead` — excluye candidatos muertos del recorrido BFS/DFS
+> - Los candidatos muertos aparecen en `GRAPH_REPORT.md` bajo **Dead Code Candidates**
+>
+> **Configuración** (ambos repos deben ser carpetas hermanas):
+> ```bash
+> git clone https://github.com/txape10/tree-sitter-abap "8 - tree-sitter-abap"
+> git clone https://github.com/txape10/graphify "6 - Parser ABAP + integración en Graphify"
+> cd "6 - Parser ABAP + integración en Graphify"
+> uv sync        # instala tree-sitter-abap desde ../8 - tree-sitter-abap (editable)
+> uv run graphify install --platform windows   # o --platform claude
+> ```
+>
+> El resto de la documentación (en inglés) está en [README.md](../../README.md).
+
+---
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/safishamsi/graphify/v4/docs/logo-text.svg" width="260" height="64" alt="Graphify"/>
 </p>
