@@ -3,8 +3,8 @@
 > It depends on a local fork of [kennyhml/tree-sitter-abap](https://github.com/kennyhml/tree-sitter-abap) as a sibling directory.
 >
 > **What it extracts from `.abap` files:**
-> - Nodes: classes (`ZCL_*`/`YCL_*` definitions), methods, interfaces, FORMs, function modules, function groups, reports
-> - Edges: `calls` (method `->`, `CALL FUNCTION`, `PERFORM`)
+> - Nodes: classes (`ZCL_*`/`YCL_*` definitions and cross-file references), methods (from definitions in the corpus), interfaces, FORMs, function modules, function groups, reports
+> - Edges: `calls` (method `->`, `=>`, `CALL FUNCTION`, `PERFORM`); `uses` INFERRED (`TYPE REF TO`, `NEW`, `CREATE OBJECT`)
 > - Node attribute `kind`: `z_custom` (Z/Y prefix) vs `sap_standard` — filter the graph by ownership
 >
 > **Dead code detection (ABAP-specific):**

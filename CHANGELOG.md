@@ -4,6 +4,12 @@ Full release notes with details on each version: [GitHub Releases](https://githu
 
 ## Unreleased
 
+- Feat: ABAP language support — `extract_abap()` via tree-sitter-abap. Extracts classes, methods, interfaces, FORMs, function modules, function groups, and reports. Call-graph edges (`calls`) for method `->` (instance) and `=>` (static), `CALL FUNCTION`, and `PERFORM`; instantiation edges (`uses`) for `TYPE REF TO`, `NEW`, and `CREATE OBJECT`. Deterministic global IDs for classes (`abap_cls_*`) and interfaces (`abap_intf_*`) enable cross-file reconciliation.
+- Feat: ABAP object classification — node attribute `kind`: `z_custom` (Z/Y prefix) vs `sap_standard`. Enables graph filtering by ownership: customer-developed objects vs SAP-standard dependencies.
+- Feat: ABAP dead code detection — `mark_dead_candidates(G)` in `build.py` flags Z/Y custom objects with zero cross-file callers as `dead_candidate: true`. Excluded: FORMs, function modules, local classes (`LCL_`/`MCL_`), test classes, and SAP-standard objects. Results appear in `GRAPH_REPORT.md` under **Dead Code Candidates**. Options: `--hide-dead` (writes `graph_full.json` + filtered `graph.json`) and `--no-dead` (excludes candidates from BFS/DFS traversal).
+- Fix: ABAP dead candidate false positives — FORMs emitted from `.prog.abap` files and SAP-standard call-site nodes are no longer marked dead. Stem-match guard ensures only include-definition nodes (label == file stem) are eligible.
+- Feat: ABAP cross-file reachability — `TYPE REF TO`, `NEW`, and `CREATE OBJECT` emit `uses INFERRED` edges; class/interface IDs are global so stubs from caller files reconcile with definition nodes automatically. Stubs carry `source_location=None` so `mark_dead_candidates` skips them if the definition file is absent from the corpus.
+
 - CI: bandit (MEDIUM+ severity) and pip-audit security scans added as a non-blocking `security-scan` job. Both run with `continue-on-error: true` so they never break CI — advisory signal only, with the intent to remove the gate once pre-existing findings are triaged.
 - Docs: RFC for file-level node summaries added (`docs/node-summaries-rfc.md`). Proposes inline `graph.json` attribute vs sidecar storage options with pros/cons, phased implementation plan, and open questions for maintainer decision.
 

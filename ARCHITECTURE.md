@@ -63,6 +63,57 @@ Every extractor returns:
 4. Add the tree-sitter package to `pyproject.toml` dependencies.
 5. Add a fixture file to `tests/fixtures/` and tests to `tests/test_languages.py`.
 
+## ABAP extraction details
+
+### extract_abap()
+
+Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-abap`).
+
+**Nodes extracted:**
+
+| Label pattern | Source construct |
+|---|---|
+| `CLASS <name> DEFINITION` | `CLASS ... DEFINITION` block |
+| `CLASS <name> IMPLEMENTATION` | `CLASS ... IMPLEMENTATION` block |
+| `<class>-><method>` / `<class>=><method>` | `METHOD` inside implementation |
+| `INTERFACE <name>` | `INTERFACE` block |
+| `FUNCTION GROUP <name>` | from filename of `*.fugr.abap` |
+| `FUNCTION <name>` | `FUNCTION` block inside a function group |
+| `REPORT <name>` | derived from filename of `*.prog.abap` |
+| `FORM <name>` | `FORM` block (legacy subroutine) |
+
+**Edges extracted:**
+
+| Relation | Confidence | Trigger |
+|---|---|---|
+| `calls` | `EXTRACTED` | `CALL FUNCTION "..."` |
+| `calls` | `INFERRED` | method `->` / `=>` call, `PERFORM`, second-pass call-graph |
+| `uses` | `INFERRED` | `DATA ... TYPE REF TO <class>`, `NEW <class>( )`, `CREATE OBJECT ... TYPE <class>` |
+| `contains` | `EXTRACTED` | file→class, class→method, file→interface, file→form |
+
+**Node attributes (ABAP-specific):**
+
+- `kind`: `"z_custom"` for objects starting with `Z` or `Y`; `"sap_standard"` for all others. Enables `--hide-dead` and graph filters to separate customer code from SAP dependencies.
+- `dead_candidate`: set by `build.mark_dead_candidates(G)` — see below.
+
+**ID strategy:**
+
+- Classes: `_make_id("abap_cls", name)` — global, file-independent. Same ID whether the node comes from the definition file or a reference stub.
+- Interfaces: `_make_id("abap_intf", name)` — same rationale.
+- Methods: `_make_id("abap_cls", class_name, method_name)`.
+- Function modules: `_make_id("abap_fn", name)` — global.
+- FORMs / reports: file-scoped via `_make_id(_file_stem(path), name)`.
+
+**Stub nodes:** when a `TYPE REF TO`, `NEW`, or `CREATE OBJECT` reference targets a class not in the corpus, `_ensure_stub()` creates a lightweight placeholder node with `source_file=""` and `source_location=None`. If the definition file is later processed, `G.add_node()` overwrites the stub with real values. `source_location=None` prevents `mark_dead_candidates` from flagging stubs.
+
+### Dead code detection (ABAP)
+
+`build.mark_dead_candidates(G)` runs after `build_graph()` and sets `dead_candidate: true` on Z/Y custom objects that have zero cross-file in-degree (no callers from other files).
+
+**Marked:** `CLASS Z*/Y* DEFINITION`, `ZCL_*/YCL_*-><method>`, `ZCL_*/YCL_*=><method>`, and `.prog.abap` include nodes whose label matches the file stem.
+
+**Never marked:** FORMs (called from transactions outside the graph), function modules, function groups, local classes (`LCL_`/`MCL_`), test classes (`FOR TESTING`), test methods (`*_TEST`), SAP-standard objects (no Z/Y prefix), and stub nodes (`source_location=None`).
+
 ## Security
 
 All external input passes through `graphify/security.py` before use:
