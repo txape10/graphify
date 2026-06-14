@@ -254,6 +254,41 @@ class TestMarkDeadCandidates:
         mark_dead_candidates(G)
         assert G.nodes["inc3"].get("dead_candidate") is True
 
+    def test_z_class_with_uses_edge_cross_file_not_marked(self):
+        """Class Z targeted by a uses edge from a different file must not be marked.
+
+        Covers TYPE REF TO / NEW / CREATE OBJECT references: the caller emits a
+        uses edge whose source is in a different file than the class definition.
+        """
+        G = _make_graph(
+            [
+                {"id": "abap_cls_zcl_traslados",
+                 "label": "CLASS ZCL_TRASLADOS DEFINITION",
+                 "source_file": "zcl_traslados.abap", "source_location": "L1"},
+                {"id": "caller_method", "label": "ZCL_CALLER->RUN",
+                 "source_file": "zcl_caller.abap", "source_location": "L10"},
+            ],
+            [{"source": "caller_method", "target": "abap_cls_zcl_traslados",
+              "_src": "caller_method", "_tgt": "abap_cls_zcl_traslados",
+              "relation": "uses"}],
+        )
+        mark_dead_candidates(G)
+        assert not G.nodes["abap_cls_zcl_traslados"].get("dead_candidate")
+
+    def test_z_class_stub_source_location_none_skipped(self):
+        """Class stub (source_location=None) from cross-file reference must not be marked.
+
+        When the class definition file is not in the corpus, _ensure_stub creates
+        a node with source_location=None. mark_dead_candidates must skip it.
+        """
+        G = _make_graph([
+            {"id": "abap_cls_zcl_target",
+             "label": "CLASS ZCL_TARGET DEFINITION",
+             "source_file": "", "source_location": None},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["abap_cls_zcl_target"].get("dead_candidate")
+
 
 # ---------------------------------------------------------------------------
 # to_json hide_dead

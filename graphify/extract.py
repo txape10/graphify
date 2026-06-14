@@ -11466,6 +11466,29 @@ def extract_abap(path: Path) -> dict:
                           "confidence": confidence, "source_file": str_path,
                           "source_location": f"L{line}"})
 
+    def _uses_edge(src: str, tgt: str, confidence: str, line: int) -> None:
+        if src == tgt:
+            return
+        key = (src, tgt, "uses")
+        if key not in seen_edges:
+            seen_edges.add(key)
+            edges.append({"source": src, "target": tgt, "relation": "uses",
+                          "confidence": confidence, "source_file": str_path,
+                          "source_location": f"L{line}"})
+
+    def _ensure_stub(nid: str, label: str, kind: str) -> None:
+        """Stub node for a cross-file reference (no source_location).
+
+        source_location=None ensures mark_dead_candidates skips it if the
+        real definition is not in the corpus. When the definition file IS
+        processed, G.add_node() overwrites these attributes with real values.
+        """
+        if nid not in seen_ids:
+            seen_ids.add(nid)
+            nodes.append({"id": nid, "label": label, "file_type": "code",
+                          "source_file": "", "source_location": None,
+                          "kind": kind})
+
     # Stack items: (node, owner_nid, cls_name_upper)
     # owner_nid — source for call edges in the current scope
     # cls_name  — class name to scope method IDs (empty outside a class impl)
@@ -11479,7 +11502,7 @@ def extract_abap(path: Path) -> dict:
         if ntype == "class_definition":
             name = _fname(node, "name")
             if name:
-                nid = _make_id(stem, name)
+                nid = _make_id("abap_cls", name)
                 _ensure(nid, f"CLASS {name} DEFINITION", line, _kind(name))
                 _contains_edge(file_nid, nid)
                 for child in reversed(node.children):
@@ -11489,7 +11512,7 @@ def extract_abap(path: Path) -> dict:
         if ntype == "class_implementation":
             name = _fname(node, "name")
             if name:
-                nid = _make_id(stem, name)
+                nid = _make_id("abap_cls", name)
                 _ensure(nid, f"CLASS {name}", line, _kind(name))
                 _contains_edge(file_nid, nid)
                 for child in reversed(node.children):
@@ -11509,7 +11532,7 @@ def extract_abap(path: Path) -> dict:
         if ntype == "interface_definition":
             name = _fname(node, "name")
             if name:
-                nid = _make_id(stem, name)
+                nid = _make_id("abap_intf", name)
                 _ensure(nid, f"INTERFACE {name}", line, _kind(name))
                 _contains_edge(file_nid, nid)
                 for child in reversed(node.children):
@@ -11572,6 +11595,45 @@ def extract_abap(path: Path) -> dict:
                     tgt = _make_id("abap_method", raw)
                     _ensure(tgt, raw, line, _kind(raw))
                     _call_edge(owner, tgt, "INFERRED", line)
+
+        elif ntype == "reference_type":
+            # DATA lo_x TYPE REF TO <class-or-interface>
+            for rt_child in node.children:
+                if rt_child.type == "ref_to":
+                    for ident in rt_child.children:
+                        if ident.type == "identifier":
+                            cls = _text(ident).upper()
+                            if cls:
+                                if cls.upper().startswith(("ZIF_", "YIF_")):
+                                    tgt = _make_id("abap_intf", cls)
+                                    _ensure_stub(tgt, f"INTERFACE {cls}", _kind(cls))
+                                else:
+                                    tgt = _make_id("abap_cls", cls)
+                                    _ensure_stub(tgt, f"CLASS {cls} DEFINITION", _kind(cls))
+                                _uses_edge(owner, tgt, "INFERRED", line)
+                            break
+                    break
+
+        elif ntype == "new_expression":
+            # lo = NEW <class>( )
+            tgt_node = node.child_by_field_name("type")
+            if tgt_node:
+                cls = _text(tgt_node).upper()
+                if cls:
+                    tgt = _make_id("abap_cls", cls)
+                    _ensure_stub(tgt, f"CLASS {cls} DEFINITION", _kind(cls))
+                    _uses_edge(owner, tgt, "INFERRED", line)
+
+        elif ntype == "ERROR":
+            # CREATE OBJECT lo_x TYPE <class>  (parsed as ERROR by tree-sitter-abap)
+            raw = _text(node).upper()
+            if raw.startswith("CREATE OBJECT"):
+                m = re.search(r"\bTYPE\s+(\w+)", raw)
+                if m:
+                    cls = m.group(1)
+                    tgt = _make_id("abap_cls", cls)
+                    _ensure_stub(tgt, f"CLASS {cls} DEFINITION", _kind(cls))
+                    _uses_edge(owner, tgt, "INFERRED", line)
 
         # Default: push children with inherited context
         for child in reversed(node.children):

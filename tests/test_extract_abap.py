@@ -178,3 +178,78 @@ def test_extract_abap_deterministic_ids():
     ids1 = {n["id"] for n in result1["nodes"]}
     ids2 = {n["id"] for n in result2["nodes"]}
     assert ids1 == ids2
+
+
+def test_extract_abap_class_id_is_global():
+    """Class and interface node IDs must use global schemes ('abap_cls'/'abap_intf').
+
+    This ensures that reference stubs created by callers in other files share
+    the same ID as the real definition node, enabling cross-file in-degree
+    counting in mark_dead_candidates.
+    """
+    result = extract_abap(SAMPLE)
+    cls_node = next(
+        (n for n in result["nodes"] if "ZCL_GREETER" in n["label"].upper()
+         and "DEFINITION" in n["label"].upper()),
+        None,
+    )
+    assert cls_node is not None
+    assert cls_node["id"] == _make_id("abap_cls", "ZCL_GREETER")
+
+    intf_node = next(
+        (n for n in result["nodes"] if "ZIF_PRINTABLE" in n["label"].upper()),
+        None,
+    )
+    assert intf_node is not None
+    assert intf_node["id"] == _make_id("abap_intf", "ZIF_PRINTABLE")
+
+
+# ---------------------------------------------------------------------------
+# Instantiation edges (TYPE REF TO / NEW / CREATE OBJECT)
+# ---------------------------------------------------------------------------
+
+INST = FIXTURES / "instantiation.abap"
+
+
+def test_extract_abap_type_ref_to_emits_uses_edge():
+    """DATA lo TYPE REF TO <class> must emit a uses INFERRED edge."""
+    result = extract_abap(INST)
+    uses_edges = [e for e in result["edges"] if e["relation"] == "uses"]
+    assert len(uses_edges) >= 1
+    targets = {e["target"] for e in uses_edges}
+    assert _make_id("abap_cls", "ZCL_PRODUCT") in targets
+
+
+def test_extract_abap_uses_edge_confidence_is_inferred():
+    """Instantiation uses edges must have confidence INFERRED."""
+    result = extract_abap(INST)
+    for edge in result["edges"]:
+        if edge["relation"] == "uses":
+            assert edge["confidence"] == "INFERRED"
+
+
+def test_extract_abap_uses_edge_deduplication():
+    """Three patterns referencing the same class must produce exactly one uses edge."""
+    result = extract_abap(INST)
+    tgt = _make_id("abap_cls", "ZCL_PRODUCT")
+    uses_to_target = [e for e in result["edges"]
+                      if e["relation"] == "uses" and e["target"] == tgt]
+    assert len(uses_to_target) == 1
+
+
+def test_extract_abap_instantiation_stub_has_no_source_location():
+    """Referenced class stub must have source_location=None so mark_dead_candidates skips it."""
+    result = extract_abap(INST)
+    tgt_id = _make_id("abap_cls", "ZCL_PRODUCT")
+    stub = next((n for n in result["nodes"] if n["id"] == tgt_id), None)
+    assert stub is not None, "Stub node for ZCL_PRODUCT must be present"
+    assert stub["source_location"] is None
+
+
+def test_extract_abap_no_dangling_uses_edge_sources():
+    """Every uses edge source must reference a known node."""
+    result = extract_abap(INST)
+    node_ids = _node_ids(result)
+    for edge in result["edges"]:
+        if edge["relation"] == "uses":
+            assert edge["source"] in node_ids, f"Dangling uses source: {edge['source']}"
