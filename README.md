@@ -1,3 +1,22 @@
+> **Fork note — ABAP support**
+> This is a fork of [safishamsi/graphify](https://github.com/safishamsi/graphify) (branch `v8`) that adds ABAP as an extractable language.
+> It depends on a local fork of [kennyhml/tree-sitter-abap](https://github.com/kennyhml/tree-sitter-abap) as a sibling directory.
+>
+> **What it extracts from `.abap` files:** classes, methods, interfaces, FORMs, reports, and `calls` edges (CALL FUNCTION, PERFORM, method calls).
+>
+> **Setup** (both repos must be siblings):
+> ```bash
+> git clone https://github.com/txape10/tree-sitter-abap "8 - tree-sitter-abap"
+> git clone https://github.com/txape10/graphify "6 - Parser ABAP + integración en Graphify"
+> cd "6 - Parser ABAP + integración en Graphify"
+> uv sync        # installs tree-sitter-abap from ../8 - tree-sitter-abap (editable)
+> uv run graphify install --platform windows   # or --platform claude
+> ```
+>
+> Everything else below is the upstream graphify documentation.
+
+---
+
 <p align="center">
   <a href="https://graphifylabs.ai"><img src="https://raw.githubusercontent.com/safishamsi/graphify/v4/docs/logo-text.svg" width="260" height="64" alt="Graphify"/></a>
 </p>

@@ -11397,7 +11397,191 @@ def extract_terraform(path: Path) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+def extract_abap(path: Path) -> dict:
+    """Extract classes, methods, FORMs, interfaces, and calls from a .abap file.
+
+    Nodes: CLASS DEFINITION/IMPLEMENTATION, METHOD, INTERFACE, FORM, REPORT.
+    Edges: contains (file→class→method/form) and calls (CALL FUNCTION EXTRACTED,
+           PERFORM and static ZCL=>method INFERRED).
+    IDs are deterministic: derived from object names, not byte offsets.
+    """
+    try:
+        from tree_sitter import Language, Parser
+        from tree_sitter_abap import language as _abap_language
+    except ImportError:
+        return {
+            "nodes": [], "edges": [],
+            "error": "tree-sitter-abap not installed. Run: pip install -e '../8 - tree-sitter-abap'",
+        }
+
+    try:
+        _parser = Parser(Language(_abap_language()))
+        source = path.read_bytes()
+        tree = _parser.parse(source)
+        root = tree.root_node
+    except Exception as e:
+        return {"nodes": [], "edges": [], "error": str(e)}
+
+    str_path = str(path)
+    stem = _file_stem(path)
+    file_nid = _make_id(str_path)
+
+    nodes: list[dict] = [{"id": file_nid, "label": path.name, "file_type": "code",
+                           "source_file": str_path, "source_location": None}]
+    edges: list[dict] = []
+    seen_ids: set[str] = {file_nid}
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def _text(n) -> str:
+        return source[n.start_byte:n.end_byte].decode("utf-8", errors="replace").strip()
+
+    def _fname(n, field: str) -> str:
+        c = n.child_by_field_name(field)
+        return _text(c).upper() if c else ""
+
+    def _kind(name: str) -> str:
+        return "z_custom" if name and name[0] in ("Z", "Y") else "sap_standard"
+
+    def _ensure(nid: str, label: str, line: int, kind: str) -> None:
+        if nid not in seen_ids:
+            seen_ids.add(nid)
+            nodes.append({"id": nid, "label": label, "file_type": "code",
+                          "source_file": str_path, "source_location": f"L{line}",
+                          "kind": kind})
+
+    def _contains_edge(parent: str, child: str) -> None:
+        key = (parent, child, "contains")
+        if key not in seen_edges:
+            seen_edges.add(key)
+            edges.append({"source": parent, "target": child, "relation": "contains",
+                          "confidence": "EXTRACTED", "source_file": str_path})
+
+    def _call_edge(src: str, tgt: str, confidence: str, line: int) -> None:
+        if src == tgt:
+            return
+        key = (src, tgt, "calls")
+        if key not in seen_edges:
+            seen_edges.add(key)
+            edges.append({"source": src, "target": tgt, "relation": "calls",
+                          "confidence": confidence, "source_file": str_path,
+                          "source_location": f"L{line}"})
+
+    # Stack items: (node, owner_nid, cls_name_upper)
+    # owner_nid — source for call edges in the current scope
+    # cls_name  — class name to scope method IDs (empty outside a class impl)
+    stack: list[tuple] = [(root, file_nid, "")]
+
+    while stack:
+        node, owner, cls_name = stack.pop()
+        ntype = node.type
+        line = node.start_point[0] + 1
+
+        if ntype == "class_definition":
+            name = _fname(node, "name")
+            if name:
+                nid = _make_id(stem, name)
+                _ensure(nid, f"CLASS {name} DEFINITION", line, _kind(name))
+                _contains_edge(file_nid, nid)
+                for child in reversed(node.children):
+                    stack.append((child, nid, name))
+            continue
+
+        if ntype == "class_implementation":
+            name = _fname(node, "name")
+            if name:
+                nid = _make_id(stem, name)
+                _ensure(nid, f"CLASS {name}", line, _kind(name))
+                _contains_edge(file_nid, nid)
+                for child in reversed(node.children):
+                    stack.append((child, nid, name))
+            continue
+
+        if ntype == "method_implementation":
+            raw = _fname(node, "name")  # handles ZIF_IF~METHOD via full text
+            if raw and cls_name:
+                nid = _make_id(stem, cls_name, raw)
+                _ensure(nid, f"{cls_name}->{raw}", line, _kind(cls_name))
+                _contains_edge(owner, nid)
+                for child in reversed(node.children):
+                    stack.append((child, nid, cls_name))
+            continue
+
+        if ntype == "interface_definition":
+            name = _fname(node, "name")
+            if name:
+                nid = _make_id(stem, name)
+                _ensure(nid, f"INTERFACE {name}", line, _kind(name))
+                _contains_edge(file_nid, nid)
+                for child in reversed(node.children):
+                    stack.append((child, nid, name))
+            continue
+
+        if ntype == "form_definition":
+            name = _fname(node, "name")
+            if name:
+                nid = _make_id(stem, name)
+                _ensure(nid, f"FORM {name}", line, _kind(name))
+                _contains_edge(file_nid, nid)
+                for child in reversed(node.children):
+                    stack.append((child, nid, cls_name))
+            continue
+
+        if ntype == "report_statement":
+            name = _fname(node, "name")
+            if name:
+                nid = _make_id(stem, name)
+                _ensure(nid, f"REPORT {name}", line, _kind(name))
+                _contains_edge(file_nid, nid)
+            continue
+
+        elif ntype == "call_function_statement":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                raw = _text(name_node).strip("'`\"").upper()
+                if raw:
+                    tgt = _make_id("abap_fn", raw)
+                    _ensure(tgt, raw, line, _kind(raw))
+                    _call_edge(owner, tgt, "EXTRACTED", line)
+
+        elif ntype == "perform_statement":
+            routine = node.child_by_field_name("routine")
+            if routine:
+                name_node = routine.child_by_field_name("name")
+                if name_node:
+                    raw = _text(name_node).upper()
+                    if raw:
+                        tgt = _make_id(stem, raw)
+                        _ensure(tgt, f"FORM {raw}", line, _kind(raw))
+                        _call_edge(owner, tgt, "INFERRED", line)
+
+        elif ntype == "method_call":
+            src_node = node.child_by_field_name("source")
+            name_node = node.child_by_field_name("name")
+            if src_node and name_node and "=>" in _text(src_node):
+                cls_ref = _text(src_node).replace("=>", "").strip().upper()
+                meth = _text(name_node).upper()
+                tgt = _make_id(stem, cls_ref, meth)
+                _ensure(tgt, f"{cls_ref}=>{meth}", line, _kind(cls_ref))
+                _call_edge(owner, tgt, "INFERRED", line)
+
+        elif ntype == "call_method_statement":
+            method_node = node.child_by_field_name("method")
+            if method_node:
+                raw = _text(method_node).upper()
+                if raw:
+                    tgt = _make_id("abap_method", raw)
+                    _ensure(tgt, raw, line, _kind(raw))
+                    _call_edge(owner, tgt, "INFERRED", line)
+
+        # Default: push children with inherited context
+        for child in reversed(node.children):
+            stack.append((child, owner, cls_name))
+
+    return {"nodes": nodes, "edges": edges}
+
+
 _DISPATCH: dict[str, Any] = {
+    ".abap": extract_abap,
     ".py": extract_python,
     ".js": extract_js,
     ".jsx": extract_js,

@@ -920,8 +920,12 @@ def _call_openai_compat(
             # Estimate input tokens: user_message chars / 4 (standard BPE
             # heuristic) + 400 for the system prompt, then add output headroom.
             num_ctx = auto_num_ctx
-        keep_alive = os.environ.get("GRAPHIFY_OLLAMA_KEEP_ALIVE", "30m")
-        kwargs["extra_body"] = {"options": {"num_ctx": num_ctx}, "keep_alive": keep_alive}
+        # keep_alive and options.num_ctx are Ollama-native fields rejected by
+        # OpenAI-compatible cloud APIs (e.g. Groq). Only send them for local Ollama.
+        _is_local_ollama = "localhost" in base_url or "127.0.0.1" in base_url
+        if _is_local_ollama:
+            keep_alive = os.environ.get("GRAPHIFY_OLLAMA_KEEP_ALIVE", "30m")
+            kwargs["extra_body"] = {"options": {"num_ctx": num_ctx}, "keep_alive": keep_alive}
     resp = client.chat.completions.create(**kwargs)
     if not resp.choices or resp.choices[0].message is None:
         raise ValueError("LLM returned empty or filtered response")
