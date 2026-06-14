@@ -11552,7 +11552,7 @@ def extract_abap(path: Path) -> dict:
         if ntype == "report_statement":
             name = _fname(node, "name")
             if name:
-                nid = _make_id(stem, name)
+                nid = _make_id("abap_prog", name)
                 _ensure(nid, f"REPORT {name}", line, _kind(name))
                 _contains_edge(file_nid, nid)
             continue
@@ -11638,6 +11638,92 @@ def extract_abap(path: Path) -> dict:
         # Default: push children with inherited context
         for child in reversed(node.children):
             stack.append((child, owner, cls_name))
+
+    return {"nodes": nodes, "edges": edges}
+
+
+_TRAN_XML_MAX_BYTES = 512 * 1024  # 512 KB — sane upper bound for a single .tran.xml
+
+
+def extract_tran(path: Path) -> dict:
+    """Extract SAP transaction→program relationships from a .tran.xml abapGit export.
+
+    Generates one transaction node (kind=z_custom) and a launches EXTRACTED edge
+    to the target program (PGMNA). Only Z/Y-prefixed programs get an edge;
+    SAP-standard or empty PGMNA are silently skipped.
+    Program stubs use _make_id("abap_prog", name) — the same global scheme that
+    extract_abap uses for REPORT statements — so the stub reconciles with the real
+    node when both files are in the corpus.
+    """
+    import xml.etree.ElementTree as _ET
+
+    str_path = str(path)
+
+    try:
+        raw = path.read_bytes()
+        # Guard against unexpectedly large files before handing to the XML parser.
+        if len(raw) > _TRAN_XML_MAX_BYTES:
+            return {"nodes": [], "edges": [], "error": "file too large"}
+        text = raw.decode("utf-8", errors="replace")
+        # abapGit exports multiple root elements in the same file; wrap in a synthetic root.
+        root_xml = _ET.fromstring(f"<root>{text}</root>")
+    except Exception as e:
+        return {"nodes": [], "edges": [], "error": str(e)}
+
+    tstc = root_xml.find("TSTC")
+    tstct = root_xml.find("TSTCT")
+
+    if tstc is None:
+        return {"nodes": [], "edges": []}
+
+    def _txt(parent, tag: str) -> str:
+        el = parent.find(tag)
+        return (el.text or "").strip() if el is not None else ""
+
+    tcode = _txt(tstc, "TCODE").upper()
+    pgmna = _txt(tstc, "PGMNA").upper()
+    dypno = _txt(tstc, "DYPNO")
+    ttext = _txt(tstct, "TTEXT") if tstct is not None else ""
+
+    if not tcode:
+        return {"nodes": [], "edges": []}
+
+    tran_nid = _make_id("abap_tran", tcode)
+    nodes: list[dict] = [{
+        "id": tran_nid,
+        "label": tcode,
+        "file_type": "code",
+        "source_file": str_path,
+        "source_location": "L1",
+        "kind": "z_custom",
+        "tcode": tcode,
+        "pgmna": pgmna,
+        "dypno": dypno,
+        "ttext": ttext,
+    }]
+    edges: list[dict] = []
+
+    if pgmna and pgmna[0] in ("Z", "Y"):
+        prog_nid = _make_id("abap_prog", pgmna)
+        # Stub node: source_location=None so mark_dead_candidates skips it if the
+        # real program file is absent from the corpus.
+        nodes.append({
+            "id": prog_nid,
+            "label": f"REPORT {pgmna}",
+            "file_type": "code",
+            "source_file": "",
+            "source_location": None,
+            "kind": "z_custom",  # always z_custom: guard above ensures Z/Y prefix
+        })
+        edges.append({
+            "source": tran_nid,
+            "target": prog_nid,
+            "relation": "launches",
+            "confidence": "EXTRACTED",
+            "source_file": str_path,
+            "source_location": "L1",
+            "weight": 1.0,
+        })
 
     return {"nodes": nodes, "edges": edges}
 
@@ -11733,6 +11819,8 @@ _DISPATCH: dict[str, Any] = {
 
 def _get_extractor(path: Path) -> Any | None:
     """Return the correct extractor function for a file, or None if unsupported."""
+    if path.name.endswith(".tran.xml"):
+        return extract_tran
     if path.name.endswith(".blade.php"):
         return extract_blade
     # MCP config files (.mcp.json, claude_desktop_config.json, ...) are routed
@@ -12284,7 +12372,7 @@ def collect_files(target: Path, *, follow_symlinks: bool = False, root: Path | N
             ]
             for fname in filenames:
                 p = dp / fname
-                if p.suffix in _EXTENSIONS and not _ignored(p):
+                if (p.suffix in _EXTENSIONS or p.name.endswith(".tran.xml")) and not _ignored(p):
                     results.append(p)
         return sorted(results)
     # Walk with symlink following + cycle detection
@@ -12300,7 +12388,7 @@ def collect_files(target: Path, *, follow_symlinks: bool = False, root: Path | N
         dirnames[:] = [d for d in dirnames if not _is_noise_dir(d)]
         for fname in filenames:
             p = dp / fname
-            if p.suffix in _EXTENSIONS and not _ignored(p):
+            if (p.suffix in _EXTENSIONS or p.name.endswith(".tran.xml")) and not _ignored(p):
                 results.append(p)
     return sorted(results)
 

@@ -386,6 +386,8 @@ def classify_file(path: Path) -> FileType | None:
     # Compound extensions must be checked before simple suffix lookup
     if path.name.lower().endswith(".blade.php"):
         return FileType.CODE
+    if path.name.lower().endswith(".tran.xml"):
+        return FileType.CODE
     ext = path.suffix.lower()
     if not ext:
         return _shebang_file_type(path)

@@ -1,0 +1,9 @@
+<TSTC>
+  <TCODE>ZFI0001</TCODE>
+  <PGMNA>Z_P_CP_NOMINAS</PGMNA>
+  <DYPNO>1000</DYPNO>
+</TSTC>
+<TSTCT>
+  <TCODE>ZFI0001</TCODE>
+  <TTEXT>Facturación Nómina y Anticipos</TTEXT>
+</TSTCT>

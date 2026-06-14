@@ -326,6 +326,55 @@ class TestMarkDeadCandidates:
         mark_dead_candidates(G)
         assert not G.nodes["c1"].get("dead_candidate")
 
+    def test_report_with_tcode_not_dead_candidate(self):
+        """Programa con un TCODE apuntándole (edge launches) → NO dead_candidate."""
+        from graphify.extract import _make_id
+        prog_nid = _make_id("abap_prog", "Z_P_CP_NOMINAS")
+        tran_nid = _make_id("abap_tran", "ZFI0001")
+        G = _make_graph(
+            [
+                {"id": prog_nid, "label": "REPORT Z_P_CP_NOMINAS",
+                 "source_file": "z_p_cp_nominas.abap", "source_location": "L1"},
+                {"id": tran_nid, "label": "ZFI0001",
+                 "source_file": "zfi0001.tran.xml", "source_location": "L1"},
+            ],
+            [{"source": tran_nid, "target": prog_nid, "_src": tran_nid, "_tgt": prog_nid,
+              "relation": "launches"}],
+        )
+        mark_dead_candidates(G)
+        assert not G.nodes[prog_nid].get("dead_candidate")
+
+    def test_report_without_tcode_no_callers_flagged_dev_tool(self):
+        """Programa sin TCODE y sin callers → dev_tool=True, NO dead_candidate."""
+        from graphify.extract import _make_id
+        prog_nid = _make_id("abap_prog", "Z_UTIL_ADMIN")
+        G = _make_graph([
+            {"id": prog_nid, "label": "REPORT Z_UTIL_ADMIN",
+             "source_file": "z_util_admin.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes[prog_nid].get("dead_candidate")
+        assert G.nodes[prog_nid].get("dev_tool") is True
+
+    def test_report_with_callers_not_dev_tool(self):
+        """Programa llamado desde otro código → cross_in > 0, no dev_tool."""
+        from graphify.extract import _make_id
+        prog_nid = _make_id("abap_prog", "Z_REPORT_VENTAS")
+        caller_nid = "c1"
+        G = _make_graph(
+            [
+                {"id": prog_nid, "label": "REPORT Z_REPORT_VENTAS",
+                 "source_file": "z_report_ventas.abap", "source_location": "L1"},
+                {"id": caller_nid, "label": "ZCL_CALLER->RUN",
+                 "source_file": "zcl_caller.abap", "source_location": "L10"},
+            ],
+            [{"source": caller_nid, "target": prog_nid, "_src": caller_nid, "_tgt": prog_nid,
+              "relation": "calls"}],
+        )
+        mark_dead_candidates(G)
+        assert not G.nodes[prog_nid].get("dead_candidate")
+        assert not G.nodes[prog_nid].get("dev_tool")
+
 
 # ---------------------------------------------------------------------------
 # to_json hide_dead

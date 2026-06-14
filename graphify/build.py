@@ -332,7 +332,14 @@ def mark_dead_candidates(G: nx.Graph) -> None:
 
         if not source_location:
             continue
-        if label.startswith("REPORT ") or label.startswith("FUNCTION GROUP"):
+        if label.startswith("FUNCTION GROUP"):
+            continue
+        if label.startswith("REPORT "):
+            # Programs with a TCODE launching them or other cross-file callers are reachable.
+            # Programs with no caller at all are flagged dev_tool (admin utilities run from
+            # SE38) but never dead_candidate — the graph cannot know their full call-sites.
+            if cross_in.get(nid, 0) == 0:
+                G.nodes[nid]["dev_tool"] = True
             continue
         if label.startswith("FORM "):
             continue
