@@ -175,6 +175,45 @@ class TestMarkDeadCandidates:
         mark_dead_candidates(G)
         assert not G.nodes["inc1"].get("dead_candidate")
 
+    def test_form_not_marked(self):
+        """FORMs are called from transactions outside the graph — never dead candidates."""
+        G = _make_graph([
+            {"id": "frm1", "label": "FORM ZHELPER",
+             "source_file": "ZREPORT.prog.abap", "source_location": "L50"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["frm1"].get("dead_candidate")
+
+    def test_sap_standard_prog_abap_not_marked(self):
+        """SAP standard objects (no Z/Y prefix) in .prog.abap must not be marked."""
+        G = _make_graph([
+            {"id": "sap1", "label": "/CPD/SUB_MONTH_TO_DATE",
+             "source_file": "ZREPORT.prog.abap", "source_location": "L100"},
+            {"id": "sap2", "label": "ABAP4_CALL_TRANSACTION",
+             "source_file": "ZFUGR.prog.abap", "source_location": "L200"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["sap1"].get("dead_candidate")
+        assert not G.nodes["sap2"].get("dead_candidate")
+
+    def test_z_prog_abap_include_still_marked(self):
+        """Z-prefixed .prog.abap includes with no cross-file callers are still candidates."""
+        G = _make_graph([
+            {"id": "inc2", "label": "ZREPORT_F02",
+             "source_file": "ZREPORT_F02.prog.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["inc2"].get("dead_candidate") is True
+
+    def test_y_prog_abap_include_still_marked(self):
+        """Y-prefixed .prog.abap includes are treated symmetrically with Z-prefixed."""
+        G = _make_graph([
+            {"id": "yinc1", "label": "YREPORT_F02",
+             "source_file": "YREPORT_F02.prog.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["yinc1"].get("dead_candidate") is True
+
 
 # ---------------------------------------------------------------------------
 # to_json hide_dead

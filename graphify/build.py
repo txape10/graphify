@@ -302,8 +302,9 @@ def mark_dead_candidates(G: nx.Graph) -> None:
     """Mark ABAP nodes as dead_candidate=True when cross-file in-degree is 0.
 
     Conservative: false negatives preferred over false positives.
-    Targets: Z/Y class definitions, their methods, .prog.abap includes.
-    Excludes: reports, function groups, local/test classes, stub nodes (no source_location).
+    Targets: Z/Y class definitions, their methods, Z/Y-prefixed .prog.abap includes.
+    Excludes: reports, function groups, FORMs, local/test classes, SAP-standard objects,
+    stub nodes (no source_location).
     """
     import re as _re
 
@@ -332,6 +333,8 @@ def mark_dead_candidates(G: nx.Graph) -> None:
             continue
         if label.startswith("REPORT ") or label.startswith("FUNCTION GROUP"):
             continue
+        if label.startswith("FORM "):
+            continue
         if _LOCAL_RE.match(label) or _TEST_RE.search(label):
             continue
 
@@ -340,7 +343,7 @@ def mark_dead_candidates(G: nx.Graph) -> None:
 
         if _Z_CLASS_RE.match(label) or _Z_METHOD_RE.match(label):
             G.nodes[nid]["dead_candidate"] = True
-        elif source_file.endswith(".prog.abap"):
+        elif source_file.endswith(".prog.abap") and (label.startswith("Z") or label.startswith("Y")):
             G.nodes[nid]["dead_candidate"] = True
 
 
