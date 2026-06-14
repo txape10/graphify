@@ -214,6 +214,46 @@ class TestMarkDeadCandidates:
         mark_dead_candidates(G)
         assert G.nodes["yinc1"].get("dead_candidate") is True
 
+    def test_z_static_method_marked(self):
+        """ZCL_*=>METHOD (static call operator) must be marked like ->."""
+        G = _make_graph([
+            {"id": "sm1", "label": "ZCL_AUTHORITY=>CHECK_PROCESS",
+             "source_file": "authority.abap", "source_location": "L5"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["sm1"].get("dead_candidate") is True
+
+    def test_y_static_method_marked(self):
+        """YCL_*=>METHOD treated symmetrically with ZCL_*=>METHOD."""
+        G = _make_graph([
+            {"id": "ysm1", "label": "YCL_UTIL=>FORMAT",
+             "source_file": "util.abap", "source_location": "L10"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["ysm1"].get("dead_candidate") is True
+
+    def test_prog_abap_fm_callsite_not_marked(self):
+        """CALL FUNCTION call-site nodes in .prog.abap must not be marked.
+
+        The label (Z_WF_INPUT_WF_DATA2) does not match the file stem (ZREPORT_F01),
+        so these nodes are references, not include definitions.
+        """
+        G = _make_graph([
+            {"id": "fm1", "label": "Z_WF_INPUT_WF_DATA2",
+             "source_file": "ZREPORT_F01.prog.abap", "source_location": "L75"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["fm1"].get("dead_candidate")
+
+    def test_prog_abap_include_stem_match_still_marked(self):
+        """Regression: Z include whose label matches file stem is still a dead candidate."""
+        G = _make_graph([
+            {"id": "inc3", "label": "ZREPORT_F01",
+             "source_file": "ZREPORT_F01.prog.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["inc3"].get("dead_candidate") is True
+
 
 # ---------------------------------------------------------------------------
 # to_json hide_dead
