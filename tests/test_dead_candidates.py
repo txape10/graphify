@@ -1,0 +1,238 @@
+"""Tests for dead_candidate marking and related CLI plumbing."""
+import json
+import tempfile
+from pathlib import Path
+
+import networkx as nx
+import pytest
+
+from graphify.build import mark_dead_candidates
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_graph(nodes, edges=None):
+    """Build a bare NX graph from dicts with source_file / source_location."""
+    G = nx.Graph()
+    for n in nodes:
+        G.add_node(n["id"], **{k: v for k, v in n.items() if k != "id"})
+    for e in (edges or []):
+        src = e["source"]
+        tgt = e["target"]
+        attrs = {k: v for k, v in e.items() if k not in ("source", "target")}
+        attrs.setdefault("_src", src)
+        attrs.setdefault("_tgt", tgt)
+        G.add_edge(src, tgt, **attrs)
+    return G
+
+
+# ---------------------------------------------------------------------------
+# mark_dead_candidates
+# ---------------------------------------------------------------------------
+
+class TestMarkDeadCandidates:
+
+    def test_z_class_no_cross_edges_is_marked(self):
+        G = _make_graph([
+            {"id": "c1", "label": "CLASS ZCL_FOO DEFINITION",
+             "source_file": "foo.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["c1"].get("dead_candidate") is True
+
+    def test_z_class_with_cross_edge_not_marked(self):
+        G = _make_graph(
+            [
+                {"id": "c1", "label": "CLASS ZCL_FOO DEFINITION",
+                 "source_file": "foo.abap", "source_location": "L1"},
+                {"id": "c2", "label": "CLASS ZCL_BAR DEFINITION",
+                 "source_file": "bar.abap", "source_location": "L1"},
+            ],
+            [{"source": "c2", "target": "c1", "_src": "c2", "_tgt": "c1",
+              "relation": "calls"}],
+        )
+        mark_dead_candidates(G)
+        assert not G.nodes["c1"].get("dead_candidate")
+
+    def test_z_method_no_cross_edges_is_marked(self):
+        G = _make_graph([
+            {"id": "m1", "label": "ZCL_FOO->DO_SOMETHING",
+             "source_file": "foo.abap", "source_location": "L10"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["m1"].get("dead_candidate") is True
+
+    def test_z_method_same_file_edge_still_marked(self):
+        """Same-file calls do NOT count as cross-file in-degree."""
+        G = _make_graph(
+            [
+                {"id": "m1", "label": "ZCL_FOO->HELPER",
+                 "source_file": "foo.abap", "source_location": "L5"},
+                {"id": "m2", "label": "ZCL_FOO->MAIN",
+                 "source_file": "foo.abap", "source_location": "L20"},
+            ],
+            [{"source": "m2", "target": "m1", "_src": "m2", "_tgt": "m1",
+              "relation": "calls"}],
+        )
+        mark_dead_candidates(G)
+        assert G.nodes["m1"].get("dead_candidate") is True
+
+    def test_report_not_marked(self):
+        G = _make_graph([
+            {"id": "r1", "label": "REPORT ZREPORT_VENTAS",
+             "source_file": "rep.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["r1"].get("dead_candidate")
+
+    def test_function_group_not_marked(self):
+        G = _make_graph([
+            {"id": "fg1", "label": "FUNCTION GROUP ZFUGR_VENTAS",
+             "source_file": "fg.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["fg1"].get("dead_candidate")
+
+    def test_local_class_not_marked(self):
+        G = _make_graph([
+            {"id": "lc1", "label": "CLASS LCL_HELPER DEFINITION",
+             "source_file": "foo.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["lc1"].get("dead_candidate")
+
+    def test_mcl_class_not_marked(self):
+        G = _make_graph([
+            {"id": "mc1", "label": "CLASS MCL_HELPER DEFINITION",
+             "source_file": "foo.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["mc1"].get("dead_candidate")
+
+    def test_node_without_source_location_not_marked(self):
+        """External stub nodes (no source_location) must never be marked."""
+        G = _make_graph([
+            {"id": "sap1", "label": "CLASS ZCL_FOO DEFINITION",
+             "source_file": "", "source_location": None},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["sap1"].get("dead_candidate")
+
+    def test_prog_abap_include_marked(self):
+        G = _make_graph([
+            {"id": "inc1", "label": "ZREPORT_F01",
+             "source_file": "ZREPORT_F01.prog.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["inc1"].get("dead_candidate") is True
+
+    def test_y_class_marked(self):
+        """YCL_ (Y-namespace) classes are treated like ZCL_."""
+        G = _make_graph([
+            {"id": "yc1", "label": "CLASS YCL_HELPER DEFINITION",
+             "source_file": "helper.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["yc1"].get("dead_candidate") is True
+
+    def test_y_method_marked(self):
+        G = _make_graph([
+            {"id": "ym1", "label": "YCL_HELPER->BUILD",
+             "source_file": "helper.abap", "source_location": "L5"},
+        ])
+        mark_dead_candidates(G)
+        assert G.nodes["ym1"].get("dead_candidate") is True
+
+    def test_for_testing_class_not_marked(self):
+        G = _make_graph([
+            {"id": "tc1", "label": "CLASS ZCL_FOO DEFINITION FOR TESTING",
+             "source_file": "foo.abap", "source_location": "L1"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["tc1"].get("dead_candidate")
+
+    def test_test_suffix_method_not_marked(self):
+        G = _make_graph([
+            {"id": "tm1", "label": "ZCL_FOO->VALIDATE_TEST",
+             "source_file": "foo.abap", "source_location": "L10"},
+        ])
+        mark_dead_candidates(G)
+        assert not G.nodes["tm1"].get("dead_candidate")
+
+    def test_prog_abap_include_with_cross_edge_not_marked(self):
+        G = _make_graph(
+            [
+                {"id": "inc1", "label": "ZREPORT_F01",
+                 "source_file": "ZREPORT_F01.prog.abap", "source_location": "L1"},
+                {"id": "prog1", "label": "REPORT ZREPORT",
+                 "source_file": "ZREPORT.prog.abap", "source_location": "L1"},
+            ],
+            [{"source": "prog1", "target": "inc1", "_src": "prog1", "_tgt": "inc1",
+              "relation": "includes"}],
+        )
+        mark_dead_candidates(G)
+        assert not G.nodes["inc1"].get("dead_candidate")
+
+
+# ---------------------------------------------------------------------------
+# to_json hide_dead
+# ---------------------------------------------------------------------------
+
+class TestHideDead:
+
+    def test_hide_dead_writes_graph_full_and_filters(self, tmp_path):
+        from graphify.export import to_json
+
+        G = _make_graph([
+            {"id": "c1", "label": "CLASS ZCL_FOO DEFINITION",
+             "source_file": "foo.abap", "source_location": "L1", "dead_candidate": True},
+            {"id": "c2", "label": "CLASS ZCL_BAR DEFINITION",
+             "source_file": "bar.abap", "source_location": "L1"},
+        ])
+        out = tmp_path / "graph.json"
+        result = to_json(G, {}, str(out), force=True, hide_dead=True)
+        assert result is True
+        full = tmp_path / "graph_full.json"
+        assert full.exists(), "graph_full.json must be written when hide_dead=True"
+        full_data = json.loads(full.read_text())
+        filtered_data = json.loads(out.read_text())
+        assert len(full_data["nodes"]) == 2
+        assert len(filtered_data["nodes"]) == 1
+        assert filtered_data["nodes"][0]["id"] == "c2"
+
+    def test_hide_dead_false_no_graph_full(self, tmp_path):
+        from graphify.export import to_json
+
+        G = _make_graph([
+            {"id": "c1", "label": "CLASS ZCL_FOO DEFINITION",
+             "source_file": "foo.abap", "source_location": "L1", "dead_candidate": True},
+        ])
+        out = tmp_path / "graph.json"
+        to_json(G, {}, str(out), force=True, hide_dead=False)
+        assert not (tmp_path / "graph_full.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# _query_graph_text exclude_dead
+# ---------------------------------------------------------------------------
+
+class TestExcludeDead:
+
+    def test_exclude_dead_removes_dead_nodes_from_traversal(self):
+        from graphify.serve import _query_graph_text
+
+        G = _make_graph([
+            {"id": "live1", "label": "CLASS ZCL_LIVE DEFINITION",
+             "source_file": "live.abap", "source_location": "L1"},
+            {"id": "dead1", "label": "CLASS ZCL_DEAD DEFINITION",
+             "source_file": "dead.abap", "source_location": "L1",
+             "dead_candidate": True},
+        ])
+        result_with = _query_graph_text(G, "DEAD", exclude_dead=True)
+        result_without = _query_graph_text(G, "DEAD", exclude_dead=False)
+        # With exclude_dead the dead node should not appear (no match found or pruned)
+        assert "ZCL_DEAD" not in result_with or "No matching" in result_with
+        # Without exclude_dead it should appear
+        assert "ZCL_DEAD" in result_without or "No matching" in result_without

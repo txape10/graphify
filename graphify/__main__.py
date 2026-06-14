@@ -2675,6 +2675,7 @@ def main() -> None:
 
         question = sys.argv[2]
         use_dfs = "--dfs" in sys.argv
+        exclude_dead = "--no-dead" in sys.argv
         budget = 2000
         graph_path = _default_graph_path()
         context_filters: list[str] = []
@@ -2738,6 +2739,7 @@ def main() -> None:
             depth=2,
             token_budget=budget,
             context_filters=context_filters,
+            exclude_dead=exclude_dead,
         )
         querylog.log_query(
             kind="query",
@@ -3141,6 +3143,7 @@ def main() -> None:
         # the optional positional path can appear in any order (#724).
         no_viz = "--no-viz" in sys.argv
         no_label = "--no-label" in sys.argv
+        hide_dead = "--hide-dead" in sys.argv
         _backend_arg = next((a for a in sys.argv if a.startswith("--backend=")), None)
         label_backend = _backend_arg.split("=", 1)[1] if _backend_arg else None
         _model_arg = next((a for a in sys.argv if a.startswith("--model=")), None)
@@ -3275,7 +3278,7 @@ def main() -> None:
         (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
         from graphify.export import backup_if_protected as _backup
         _backup(out)
-        to_json(G, communities, str(out / "graph.json"))
+        to_json(G, communities, str(out / "graph.json"), hide_dead=hide_dead)
         labels_path.write_text(json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False), encoding="utf-8")
 
         # Mirror watch.py pattern: gate to_html so core outputs (graph.json +
@@ -4072,8 +4075,11 @@ def main() -> None:
             elif a == "--cargo":
                 cli_cargo = True
                 i += 1
+            elif a == "--hide-dead":
+                i += 1
             else:
                 i += 1
+        hide_dead = "--hide-dead" in sys.argv
 
         if not has_path and cli_postgres_dsn is None:
             print("error: must specify a path to scan or a --postgres DSN", file=sys.stderr)
@@ -4501,7 +4507,7 @@ def main() -> None:
 
         from graphify.export import backup_if_protected as _backup
         _backup(graphify_out)
-        _to_json(G, communities, str(graph_json_path), force=True)
+        _to_json(G, communities, str(graph_json_path), force=True, hide_dead=hide_dead)
         if merged.get("output_tokens", 0) > 0:
             (graphify_out / ".graphify_semantic_marker").write_text(
                 json.dumps({"output_tokens": merged["output_tokens"]}), encoding="utf-8"

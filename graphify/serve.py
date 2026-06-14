@@ -429,7 +429,13 @@ def _query_graph_text(
     depth: int = 3,
     token_budget: int = 2000,
     context_filters: list[str] | None = None,
+    exclude_dead: bool = False,
 ) -> str:
+    if exclude_dead:
+        dead_ids = {nid for nid, attrs in G.nodes(data=True) if attrs.get("dead_candidate")}
+        if dead_ids:
+            G = G.copy()
+            G.remove_nodes_from(dead_ids)
     terms = _query_terms(question)
     scored = _score_nodes(G, terms)
     start_nodes = _pick_seeds(scored)

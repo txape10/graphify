@@ -2,7 +2,17 @@
 > This is a fork of [safishamsi/graphify](https://github.com/safishamsi/graphify) (branch `v8`) that adds ABAP as an extractable language.
 > It depends on a local fork of [kennyhml/tree-sitter-abap](https://github.com/kennyhml/tree-sitter-abap) as a sibling directory.
 >
-> **What it extracts from `.abap` files:** classes, methods, interfaces, FORMs, reports, and `calls` edges (CALL FUNCTION, PERFORM, method calls).
+> **What it extracts from `.abap` files:**
+> - Nodes: classes (`ZCL_*`/`YCL_*` definitions), methods, interfaces, FORMs, function modules, function groups, reports
+> - Edges: `calls` (method `->`, `CALL FUNCTION`, `PERFORM`)
+> - Node attribute `kind`: `z_custom` (Z/Y prefix) vs `sap_standard` — filter the graph by ownership
+>
+> **Dead code detection (ABAP-specific):**
+> Nodes with zero callers from other files are flagged with `dead_candidate: true` automatically.
+> - `graphify cluster-only --hide-dead` — writes `graph_full.json` (all nodes) and a filtered `graph.json` without dead candidates
+> - `graphify extract <path> --hide-dead` — same for full extraction
+> - `graphify query "..." --no-dead` — excludes dead candidates from BFS/DFS traversal
+> - Dead candidates appear in `GRAPH_REPORT.md` under **Dead Code Candidates**
 >
 > **Setup** (both repos must be siblings):
 > ```bash

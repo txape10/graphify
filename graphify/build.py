@@ -294,7 +294,54 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
     hyperedges = extraction.get("hyperedges", [])
     if hyperedges:
         G.graph["hyperedges"] = hyperedges
+    mark_dead_candidates(G)
     return G
+
+
+def mark_dead_candidates(G: nx.Graph) -> None:
+    """Mark ABAP nodes as dead_candidate=True when cross-file in-degree is 0.
+
+    Conservative: false negatives preferred over false positives.
+    Targets: Z/Y class definitions, their methods, .prog.abap includes.
+    Excludes: reports, function groups, local/test classes, stub nodes (no source_location).
+    """
+    import re as _re
+
+    _Z_CLASS_RE = _re.compile(r"^CLASS\s+[ZY]CL_\w+\s+DEFINITION$", _re.IGNORECASE)
+    _Z_METHOD_RE = _re.compile(r"^[ZY]CL_\w+->\w+$", _re.IGNORECASE)
+    _LOCAL_RE = _re.compile(r"^CLASS\s+(LCL_|MCL_)\w+", _re.IGNORECASE)
+    _TEST_RE = _re.compile(r"(FOR\s+TESTING|_TEST\b|_UT\b)", _re.IGNORECASE)
+
+    # Cross-file in-degree: count edges whose _src is in a different source_file than _tgt.
+    # _src/_tgt are set by build_from_json and reflect true edge direction.
+    cross_in: dict[str, int] = {}
+    for u, v, data in G.edges(data=True):
+        true_src = data.get("_src", u)
+        true_tgt = data.get("_tgt", v)
+        src_file = G.nodes.get(true_src, {}).get("source_file") or ""
+        tgt_file = G.nodes.get(true_tgt, {}).get("source_file") or ""
+        if src_file and tgt_file and src_file != tgt_file:
+            cross_in[true_tgt] = cross_in.get(true_tgt, 0) + 1
+
+    for nid, attrs in G.nodes(data=True):
+        label = str(attrs.get("label", ""))
+        source_file = str(attrs.get("source_file", "") or "")
+        source_location = attrs.get("source_location")
+
+        if not source_location:
+            continue
+        if label.startswith("REPORT ") or label.startswith("FUNCTION GROUP"):
+            continue
+        if _LOCAL_RE.match(label) or _TEST_RE.search(label):
+            continue
+
+        if cross_in.get(nid, 0) > 0:
+            continue
+
+        if _Z_CLASS_RE.match(label) or _Z_METHOD_RE.match(label):
+            G.nodes[nid]["dead_candidate"] = True
+        elif source_file.endswith(".prog.abap"):
+            G.nodes[nid]["dead_candidate"] = True
 
 
 def build(

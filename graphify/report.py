@@ -174,6 +174,22 @@ def generate(
                 f"  {d.get('source_file', '')} · relation: {d.get('relation', 'unknown')}",
             ]
 
+    # --- Dead code candidates (ABAP only) ---
+    dead_nodes = [
+        (nid, G.nodes[nid].get("label", nid), G.nodes[nid].get("source_file", ""))
+        for nid in G.nodes()
+        if G.nodes[nid].get("dead_candidate")
+    ]
+    if dead_nodes:
+        lines += ["", "## Dead Code Candidates", ""]
+        lines += [
+            "These ABAP objects have no callers from other files.",
+            "They may be unused — verify before removing.",
+            "",
+        ]
+        for _nid, _lbl, _sf in sorted(dead_nodes, key=lambda x: x[1]):
+            lines.append(f"- `{_lbl}`  ← {_sf}" if _sf else f"- `{_lbl}`")
+
     # --- Gaps section ---
     from .analyze import _is_file_node, _is_concept_node
 

@@ -481,7 +481,7 @@ def _git_head() -> str | None:
         return None
 
 
-def to_json(G: nx.Graph, communities: dict[int, list[str]], output_path: str, *, force: bool = False, built_at_commit: str | None = None) -> bool:
+def to_json(G: nx.Graph, communities: dict[int, list[str]], output_path: str, *, force: bool = False, built_at_commit: str | None = None, hide_dead: bool = False) -> bool:
     # Safety check: refuse to silently shrink an existing graph (#479)
     existing_path = Path(output_path)
     if not force and existing_path.exists():
@@ -532,6 +532,19 @@ def to_json(G: nx.Graph, communities: dict[int, list[str]], output_path: str, *,
     commit = built_at_commit if built_at_commit is not None else _git_head()
     if commit:
         data["built_at_commit"] = commit
+    if hide_dead:
+        dead_ids = {n["id"] for n in data["nodes"] if n.get("dead_candidate")}
+        if dead_ids:
+            full_path = str(Path(output_path).with_name("graph_full.json"))
+            with open(full_path, "w", encoding="utf-8") as _f:  # nosec
+                json.dump(data, _f, indent=2)
+            data = dict(data)
+            data["nodes"] = [n for n in data["nodes"] if n["id"] not in dead_ids]
+            data["links"] = [
+                lnk for lnk in data["links"]
+                if lnk.get("source") not in dead_ids and lnk.get("target") not in dead_ids
+            ]
+
     with open(output_path, "w", encoding="utf-8") as f:  # nosec
         json.dump(data, f, indent=2)
     return True
