@@ -19,6 +19,9 @@ graphify-out/
 .claude/
 skills/
 corpus_abap/
+# Archivos de trabajo internos (no forman parte del fork público)
+PLAN_herramienta.md
+probe_abap.py
 # The packaged skill bundles under graphify/skills/ are generated, committed
 # artifacts (rendered by tools/skillgen). Keep them tracked even though the
 # broad skills/ rule above ignores install-target skill dirs elsewhere.
