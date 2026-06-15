@@ -116,14 +116,16 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | `abap_event_*` | Events — same ID in declaration and `RAISE EVENT` stub |
 | `abap_tran_*` | Transactions (from `.tran.xml`) |
 | `abap_badi_method_*` | BADI method stubs (runtime-resolved, not reconciled) |
-| `<stem>_<cls>_<meth>` | Methods — file-scoped (method names not globally unique) |
+| `abap_method_*` | Methods — global, `_make_id("abap_method", class, method)` |
 | `<stem>_<name>` | FORMs — file-scoped |
 
 **Stub nodes:** cross-file references create lightweight placeholder nodes via `_ensure_stub()` with `source_file=""` and `source_location=None`. When the definition file is processed, `G.add_node()` overwrites the stub with real values. `source_location=None` signals `mark_dead_candidates` to skip stubs.
 
+**ID global vs file-scoped — method IDs:** all method nodes use a global scheme (`abap_method_*`) independent of which file is being processed. This ensures that a stub created by a caller in `zcl_bar.abap` (via `SET HANDLER me->m` or a static `ZCL_FOO=>m` call) shares the same ID as the definition in `zcl_foo.abap`, enabling cross-file in-degree counting in `mark_dead_candidates`. FORMs remain file-scoped (`<stem>_<name>`) because FORM names are not globally unique.
+
 ### extract_tran()
 
-Parses abapGit `.tran.xml` exports. abapGit places `<TSTC>` (transaction→program mapping) and `<TSTCT>` (transaction text) as sibling root elements in the same file; the extractor wraps them in a synthetic `<root>` before parsing. A 512 KB size guard prevents oversized file DoS.
+Parses abapGit `.tran.xml` exports. These files come in two formats: (1) bare sibling elements `<TSTC>…</TSTC><TSTCT>…</TSTCT>` (older abapGit) and (2) a proper XML document with `<?xml?>` declaration and `<asx:abap>/<asx:values>` root (current abapGit). The extractor handles both: it strips any `<?xml?>` declaration with a non-greedy regex, wraps the remaining content in a synthetic `<root>`, and locates `TSTC`/`TSTCT` via namespace-agnostic XPath (`.//{*}TSTC`) so the `asx:` prefix is transparent. A 512 KB size guard prevents oversized file DoS.
 
 Emits one `abap_tran` node per file plus a `launches EXTRACTED` edge to an `abap_prog` stub when `PGMNA` starts with `Z` or `Y`. The stub ID matches `extract_abap`'s REPORT node ID, so the two nodes merge automatically when the program source is in the corpus.
 
