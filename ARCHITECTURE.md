@@ -71,48 +71,80 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 
 **Nodes extracted:**
 
-| Label pattern | Source construct |
-|---|---|
-| `CLASS <name> DEFINITION` | `CLASS ... DEFINITION` block |
-| `CLASS <name> IMPLEMENTATION` | `CLASS ... IMPLEMENTATION` block |
-| `<class>-><method>` / `<class>=><method>` | `METHOD` inside implementation |
-| `INTERFACE <name>` | `INTERFACE` block |
-| `FUNCTION GROUP <name>` | from filename of `*.fugr.abap` |
-| `FUNCTION <name>` | `FUNCTION` block inside a function group |
-| `REPORT <name>` | derived from filename of `*.prog.abap` |
-| `FORM <name>` | `FORM` block (legacy subroutine) |
+| Label pattern | ID scheme | Source construct |
+|---|---|---|
+| `CLASS <name> DEFINITION` | `abap_cls_*` | `class_definition` AST node |
+| `CLASS <name>` | `abap_cls_*` | `class_implementation` AST node (same ID as DEFINITION) |
+| `<class>-><method>` | `<stem>_<cls>_<meth>` | `method_implementation` inside class impl |
+| `INTERFACE <name>` | `abap_intf_*` | `interface_definition` AST node |
+| `FUNCTION GROUP <name>` | `abap_fg_*` | `function_pool_statement` in TOP include |
+| `FUNCTION <name>` | `abap_fn_*` | `function_definition` AST node |
+| `REPORT <name>` | `abap_prog_*` | `report_statement` AST node |
+| `FORM <name>` | `<stem>_<name>` | `form_definition` AST node (file-scoped) |
+| `EVENT <name>` | `abap_event_*` | `events_declaration` / `class_events_declaration` |
+| `TRANSACTION <tcode>` | `abap_tran_*` | `extract_tran()` from `.tran.xml` |
+| `BADI-><method>` | `abap_badi_method_*` | `call_badi_statement` (runtime stub) |
 
 **Edges extracted:**
 
 | Relation | Confidence | Trigger |
 |---|---|---|
-| `calls` | `EXTRACTED` | `CALL FUNCTION "..."` |
-| `calls` | `INFERRED` | method `->` / `=>` call, `PERFORM`, second-pass call-graph |
-| `uses` | `INFERRED` | `DATA ... TYPE REF TO <class>`, `NEW <class>( )`, `CREATE OBJECT ... TYPE <class>` |
-| `contains` | `EXTRACTED` | file→class, class→method, file→interface, file→form |
+| `contains` | `EXTRACTED` | file→class, class→method/event, file→FM/FG/interface/form |
+| `calls` | `EXTRACTED` | `CALL FUNCTION "..."`, `call_badi_statement` |
+| `calls` | `INFERRED` | method `->` / `=>` call, `PERFORM`, `CALL METHOD` |
+| `submits` | `EXTRACTED` | `SUBMIT <prog>` (static, Z/Y only; dynamic skipped) |
+| `uses` | `INFERRED` | `TYPE REF TO`, `NEW`, `CREATE OBJECT`, `GET BADI TYPE`, `SET HANDLER me->` |
+| `raises` | `EXTRACTED` | `RAISE EVENT <name>` |
+| `launches` | `EXTRACTED` | `.tran.xml` TCODE → program (Z/Y only) |
 
 **Node attributes (ABAP-specific):**
 
-- `kind`: `"z_custom"` for objects starting with `Z` or `Y`; `"sap_standard"` for all others. Enables `--hide-dead` and graph filters to separate customer code from SAP dependencies.
+- `kind`: `"z_custom"` for objects starting with `Z` or `Y`; `"sap_standard"` for all others. Enables `--hide-dead` and graph filters to separate customer code from SAP dependencies. Events inside Z/Y classes inherit the class kind (event names don't follow the Z/Y convention).
 - `dead_candidate`: set by `build.mark_dead_candidates(G)` — see below.
+- `dev_tool`: set on `REPORT` nodes with no cross-file callers — utility programs run directly from SE38, not called from other code.
+- `tcode`, `pgmna`, `dypno`, `ttext`: set on transaction nodes from `.tran.xml` exports.
 
-**ID strategy:**
+**ID strategy (global IDs enable cross-file reconciliation):**
 
-- Classes: `_make_id("abap_cls", name)` — global, file-independent. Same ID whether the node comes from the definition file or a reference stub.
-- Interfaces: `_make_id("abap_intf", name)` — same rationale.
-- Methods: `_make_id("abap_cls", class_name, method_name)`.
-- Function modules: `_make_id("abap_fn", name)` — global.
-- FORMs / reports: file-scoped via `_make_id(_file_stem(path), name)`.
+| Scheme | Objects |
+|---|---|
+| `abap_cls_*` | Classes — same ID in definition file and in `TYPE REF TO` stubs |
+| `abap_intf_*` | Interfaces — same ID in definition and reference |
+| `abap_fn_*` | Function modules — same ID in FM definition and `CALL FUNCTION` stub |
+| `abap_fg_*` | Function groups |
+| `abap_prog_*` | Programs/reports — same ID in `.abap` source and `.tran.xml` stub |
+| `abap_event_*` | Events — same ID in declaration and `RAISE EVENT` stub |
+| `abap_tran_*` | Transactions (from `.tran.xml`) |
+| `abap_badi_method_*` | BADI method stubs (runtime-resolved, not reconciled) |
+| `<stem>_<cls>_<meth>` | Methods — file-scoped (method names not globally unique) |
+| `<stem>_<name>` | FORMs — file-scoped |
 
-**Stub nodes:** when a `TYPE REF TO`, `NEW`, or `CREATE OBJECT` reference targets a class not in the corpus, `_ensure_stub()` creates a lightweight placeholder node with `source_file=""` and `source_location=None`. If the definition file is later processed, `G.add_node()` overwrites the stub with real values. `source_location=None` prevents `mark_dead_candidates` from flagging stubs.
+**Stub nodes:** cross-file references create lightweight placeholder nodes via `_ensure_stub()` with `source_file=""` and `source_location=None`. When the definition file is processed, `G.add_node()` overwrites the stub with real values. `source_location=None` signals `mark_dead_candidates` to skip stubs.
+
+### extract_tran()
+
+Parses abapGit `.tran.xml` exports. abapGit places `<TSTC>` (transaction→program mapping) and `<TSTCT>` (transaction text) as sibling root elements in the same file; the extractor wraps them in a synthetic `<root>` before parsing. A 512 KB size guard prevents oversized file DoS.
+
+Emits one `abap_tran` node per file plus a `launches EXTRACTED` edge to an `abap_prog` stub when `PGMNA` starts with `Z` or `Y`. The stub ID matches `extract_abap`'s REPORT node ID, so the two nodes merge automatically when the program source is in the corpus.
 
 ### Dead code detection (ABAP)
 
-`build.mark_dead_candidates(G)` runs after `build_graph()` and sets `dead_candidate: true` on Z/Y custom objects that have zero cross-file in-degree (no callers from other files).
+`build.mark_dead_candidates(G)` runs after `build_graph()` and sets `dead_candidate: true` on Z/Y custom objects with zero cross-file in-degree (no callers from other files in the corpus).
 
-**Marked:** `CLASS Z*/Y* DEFINITION`, `ZCL_*/YCL_*-><method>`, `ZCL_*/YCL_*=><method>`, and `.prog.abap` include nodes whose label matches the file stem.
+**Marked:** `CLASS Z*/Y* DEFINITION` and `Z*/Y*-><method>` / `Z*/Y*=><method>` nodes from `.abap` files; `.prog.abap` include nodes whose label matches the file stem.
 
-**Never marked:** FORMs (called from transactions outside the graph), function modules, function groups, local classes (`LCL_`/`MCL_`), test classes (`FOR TESTING`), test methods (`*_TEST`), SAP-standard objects (no Z/Y prefix), and stub nodes (`source_location=None`).
+**Never marked (and why):**
+
+| Category | Reason |
+|---|---|
+| Function modules (`FUNCTION *`) | May be called from SAP-standard enhancement frameworks (CMOD/SMOD exits, classic BADIs) outside the corpus |
+| Function groups (`FUNCTION GROUP *`) | Containers; zero direct callers is expected |
+| FORMs (`FORM *`) | Called via `PERFORM` from programs not always in corpus |
+| Reports (`REPORT *`) | Receive `dev_tool: true` if no callers — utility programs run from SE38 |
+| Local classes (`LCL_*`, `MCL_*`) | File-local, never cross-file |
+| Test classes / test methods | Identified by `FOR TESTING` / `*_TEST` patterns |
+| SAP-standard objects (no Z/Y prefix) | Not customer code |
+| Stub nodes (`source_location=None`) | No definition in corpus |
 
 ## Security
 
