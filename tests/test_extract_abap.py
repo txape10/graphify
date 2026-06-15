@@ -428,3 +428,38 @@ def test_extract_abap_events_badi_deterministic_ids():
     r2 = extract_abap(EB_FIXTURE)
     assert {n["id"] for n in r1["nodes"]} == {n["id"] for n in r2["nodes"]}
 
+
+# ---------------------------------------------------------------------------
+# Method ID global scheme — Bug 2 regression (cross-file reconciliation)
+# ---------------------------------------------------------------------------
+
+def test_extract_abap_method_id_uses_global_scheme():
+    """Method node IDs must follow abap_method_* so callers in other files reconcile."""
+    result = extract_abap(SAMPLE)
+    # Search by exact arrow pattern to avoid matching "ZCL_GREETER" in CLASS label.
+    greet_node = next(
+        (n for n in result["nodes"] if "ZCL_GREETER->GREET" in n["label"].upper()),
+        None,
+    )
+    assert greet_node is not None, "ZCL_GREETER->GREET node not found"
+    expected_id = _make_id("abap_method", "ZCL_GREETER", "GREET")
+    assert greet_node["id"] == expected_id, (
+        f"Expected global ID {expected_id!r}, got {greet_node['id']!r}. "
+        "Method IDs must not embed the file stem."
+    )
+
+
+def test_extract_abap_method_definition_uses_global_scheme():
+    """Definition node must use abap_method_ scheme — same as stubs created by callers."""
+    result = extract_abap(EB_FIXTURE)
+    on_click_node = next(
+        (n for n in result["nodes"] if "ZCL_HANDLER->ON_CLICK" in n["label"].upper()),
+        None,
+    )
+    assert on_click_node is not None, "ZCL_HANDLER->ON_CLICK definition node not found"
+    expected_id = _make_id("abap_method", "ZCL_HANDLER", "ON_CLICK")
+    assert on_click_node["id"] == expected_id, (
+        f"Expected {expected_id!r}, got {on_click_node['id']!r}. "
+        "Definition and caller stubs must share abap_method_ scheme for cross-file reconciliation."
+    )
+

@@ -11523,7 +11523,7 @@ def extract_abap(path: Path) -> dict:
         if ntype == "method_implementation":
             raw = _fname(node, "name")  # handles ZIF_IF~METHOD via full text
             if raw and cls_name:
-                nid = _make_id(stem, cls_name, raw)
+                nid = _make_id("abap_method", cls_name, raw)
                 _ensure(nid, f"{cls_name}->{raw}", line, _kind(cls_name))
                 _contains_edge(owner, nid)
                 for child in reversed(node.children):
@@ -11647,7 +11647,7 @@ def extract_abap(path: Path) -> dict:
                     comp = child.child_by_field_name("component")
                     if subj and comp and _text(subj).upper() == "ME" and cls_name:
                         meth = _text(comp).upper()
-                        tgt = _make_id(stem, cls_name, meth)
+                        tgt = _make_id("abap_method", cls_name, meth)
                         _ensure_stub(tgt, f"{cls_name}->{meth}", _kind(cls_name))
                         _uses_edge(owner, tgt, "INFERRED", line)
 
@@ -11679,8 +11679,8 @@ def extract_abap(path: Path) -> dict:
             if src_node and name_node and "=>" in _text(src_node):
                 cls_ref = _text(src_node).replace("=>", "").strip().upper()
                 meth = _text(name_node).upper()
-                tgt = _make_id(stem, cls_ref, meth)
-                _ensure(tgt, f"{cls_ref}=>{meth}", line, _kind(cls_ref))
+                tgt = _make_id("abap_method", cls_ref, meth)
+                _ensure_stub(tgt, f"{cls_ref}=>{meth}", _kind(cls_ref))
                 _call_edge(owner, tgt, "INFERRED", line)
 
         elif ntype == "call_method_statement":
@@ -11760,14 +11760,19 @@ def extract_tran(path: Path) -> dict:
         # Guard against unexpectedly large files before handing to the XML parser.
         if len(raw) > _TRAN_XML_MAX_BYTES:
             return {"nodes": [], "edges": [], "error": "file too large"}
-        text = raw.decode("utf-8", errors="replace")
-        # abapGit exports multiple root elements in the same file; wrap in a synthetic root.
-        root_xml = _ET.fromstring(f"<root>{text}</root>")
+        import re as _re
+        # Strip the XML declaration so we can wrap the content in a synthetic root.
+        # Real abapGit exports have a proper root (asx:abap > asx:values > TSTC/TSTCT);
+        # older/test-format exports have bare sibling elements. Wrapping handles both.
+        raw_stripped = _re.sub(rb"<\?xml.*?\?>", b"", raw, count=1, flags=_re.DOTALL).lstrip()
+        root_xml = _ET.fromstring(b"<root>" + raw_stripped + b"</root>")
     except Exception as e:
         return {"nodes": [], "edges": [], "error": str(e)}
 
-    tstc = root_xml.find("TSTC")
-    tstct = root_xml.find("TSTCT")
+    # {*} wildcard matches any namespace (or no namespace) — handles both the
+    # bare-element format and the full asx:abap namespace format.
+    tstc = root_xml.find(".//{*}TSTC")
+    tstct = root_xml.find(".//{*}TSTCT")
 
     if tstc is None:
         return {"nodes": [], "edges": []}

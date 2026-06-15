@@ -161,3 +161,37 @@ def test_extract_tran_deterministic_ids():
     ids1 = {n["id"] for n in r1["nodes"]}
     ids2 = {n["id"] for n in r2["nodes"]}
     assert ids1 == ids2
+
+
+# ---------------------------------------------------------------------------
+# Formato abapGit real (asx: namespace + <?xml?> declaration)
+# ---------------------------------------------------------------------------
+
+FULL_SAMPLE = FIXTURES / "zfi0002.tran.xml"
+
+
+def test_extract_tran_full_format_transaction_node():
+    """Formato abapGit real con <?xml?> y namespace asx: debe extraer el nodo."""
+    result = extract_tran(FULL_SAMPLE)
+    tran_nid = _make_id("abap_tran", "ZFI0002")
+    node = _node_by_id(result, tran_nid)
+    assert node is not None, "Nodo transacción no encontrado en formato abapGit real"
+
+
+def test_extract_tran_full_format_attributes():
+    result = extract_tran(FULL_SAMPLE)
+    tran_nid = _make_id("abap_tran", "ZFI0002")
+    node = _node_by_id(result, tran_nid)
+    assert node["tcode"] == "ZFI0002"
+    assert node["pgmna"] == "Z_P_FACTURAS"
+    assert node["dypno"] == "0100"
+    assert "Facturas" in node["ttext"]
+    assert node["kind"] == "z_custom"
+
+
+def test_extract_tran_full_format_launches_edge():
+    result = extract_tran(FULL_SAMPLE)
+    launches = [e for e in result["edges"] if e["relation"] == "launches"]
+    assert len(launches) == 1
+    assert launches[0]["target"] == _make_id("abap_prog", "Z_P_FACTURAS")
+    assert launches[0]["confidence"] == "EXTRACTED"
