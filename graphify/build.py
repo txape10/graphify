@@ -334,6 +334,10 @@ def mark_dead_candidates(G: nx.Graph) -> None:
             continue
         if label.startswith("FUNCTION GROUP"):
             continue
+        if label.startswith("FUNCTION "):
+            # FMs can be invoked from SAP-standard enhancements (CMOD/SMOD exits,
+            # BADIs) outside the corpus — cannot reliably determine all callers.
+            continue
         if label.startswith("REPORT "):
             # Programs with a TCODE launching them or other cross-file callers are reachable.
             # Programs with no caller at all are flagged dev_tool (admin utilities run from

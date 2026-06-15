@@ -11398,11 +11398,12 @@ def extract_terraform(path: Path) -> dict:
 
 
 def extract_abap(path: Path) -> dict:
-    """Extract classes, methods, FORMs, interfaces, and calls from a .abap file.
+    """Extract classes, methods, FMs, FORMs, interfaces, and calls from a .abap file.
 
-    Nodes: CLASS DEFINITION/IMPLEMENTATION, METHOD, INTERFACE, FORM, REPORT.
-    Edges: contains (file→class→method/form) and calls (CALL FUNCTION EXTRACTED,
-           PERFORM and static ZCL=>method INFERRED).
+    Nodes: CLASS DEFINITION/IMPLEMENTATION, METHOD, INTERFACE, FUNCTION GROUP,
+           FUNCTION (module), FORM, REPORT.
+    Edges: contains (file→scope→child) and calls (CALL FUNCTION EXTRACTED,
+           PERFORM and static ZCL=>method INFERRED, SUBMIT EXTRACTED).
     IDs are deterministic: derived from object names, not byte offsets.
     """
     try:
@@ -11539,6 +11540,24 @@ def extract_abap(path: Path) -> dict:
                     stack.append((child, nid, name))
             continue
 
+        if ntype == "function_definition":
+            name = _fname(node, "name")
+            if name:
+                nid = _make_id("abap_fn", name)
+                _ensure(nid, f"FUNCTION {name}", line, _kind(name))
+                _contains_edge(file_nid, nid)
+                for child in reversed(node.children):
+                    stack.append((child, nid, name))
+            continue
+
+        if ntype == "function_pool_statement":
+            name = _fname(node, "name")
+            if name:
+                nid = _make_id("abap_fg", name)
+                _ensure(nid, f"FUNCTION GROUP {name}", line, _kind(name))
+                _contains_edge(file_nid, nid)
+            continue
+
         if ntype == "form_definition":
             name = _fname(node, "name")
             if name:
@@ -11576,6 +11595,21 @@ def extract_abap(path: Path) -> dict:
                         tgt = _make_id(stem, raw)
                         _ensure(tgt, f"FORM {raw}", line, _kind(raw))
                         _call_edge(owner, tgt, "INFERRED", line)
+
+        elif ntype == "submit_statement":
+            prog_node = node.child_by_field_name("program")
+            # Dynamic SUBMIT (SUBMIT (lv_prog)) → prog_node.type != "identifier", silently skipped.
+            if prog_node and prog_node.type == "identifier":
+                prog_name = _text(prog_node).strip().upper()
+                if prog_name and prog_name[0] in ("Z", "Y"):
+                    tgt = _make_id("abap_prog", prog_name)
+                    _ensure_stub(tgt, f"REPORT {prog_name}", _kind(prog_name))
+                    key = (owner, tgt, "submits")
+                    if key not in seen_edges and owner != tgt:
+                        seen_edges.add(key)
+                        edges.append({"source": owner, "target": tgt,
+                                      "relation": "submits", "confidence": "EXTRACTED",
+                                      "source_file": str_path, "source_location": f"L{line}"})
 
         elif ntype == "method_call":
             src_node = node.child_by_field_name("source")

@@ -254,3 +254,102 @@ def test_extract_abap_no_dangling_uses_edge_sources():
         if edge["relation"] == "uses":
             assert edge["source"] in node_ids, f"Dangling uses source: {edge['source']}"
 
+
+# ---------------------------------------------------------------------------
+# FUNCTION MODULE extraction (function_module.abap)
+# ---------------------------------------------------------------------------
+
+FM_FIXTURE = FIXTURES / "function_module.abap"
+
+
+def test_extract_abap_function_module_node():
+    result = extract_abap(FM_FIXTURE)
+    labels = _node_labels(result)
+    assert any("FUNCTION Z_ADD_NUMBERS" in lbl for lbl in labels)
+    assert any("FUNCTION Z_CALLER" in lbl for lbl in labels)
+
+
+def test_extract_abap_function_module_global_id():
+    result = extract_abap(FM_FIXTURE)
+    nid = _make_id("abap_fn", "Z_ADD_NUMBERS")
+    assert any(n["id"] == nid for n in result["nodes"])
+
+
+def test_extract_abap_function_module_kind():
+    result = extract_abap(FM_FIXTURE)
+    node = next(
+        (n for n in result["nodes"] if n.get("label") == "FUNCTION Z_ADD_NUMBERS"),
+        None,
+    )
+    assert node is not None
+    assert node["kind"] == "z_custom"
+
+
+def test_extract_abap_function_pool_node():
+    result = extract_abap(FM_FIXTURE)
+    labels = _node_labels(result)
+    assert any("FUNCTION GROUP ZFM_TEST" in lbl for lbl in labels)
+
+
+def test_extract_abap_function_pool_global_id():
+    result = extract_abap(FM_FIXTURE)
+    nid = _make_id("abap_fg", "ZFM_TEST")
+    assert any(n["id"] == nid for n in result["nodes"])
+
+
+def test_extract_abap_call_function_targets_fm_node():
+    """CALL FUNCTION inside a FM body must emit a calls edge to the FM nid."""
+    result = extract_abap(FM_FIXTURE)
+    tgt = _make_id("abap_fn", "Z_ADD_NUMBERS")
+    call_edges = [e for e in result["edges"]
+                  if e["relation"] == "calls" and e["target"] == tgt]
+    assert len(call_edges) >= 1
+    assert call_edges[0]["confidence"] == "EXTRACTED"
+
+
+def test_extract_abap_function_module_deterministic_ids():
+    r1 = extract_abap(FM_FIXTURE)
+    r2 = extract_abap(FM_FIXTURE)
+    assert {n["id"] for n in r1["nodes"]} == {n["id"] for n in r2["nodes"]}
+
+
+# ---------------------------------------------------------------------------
+# SUBMIT extraction (submit.abap)
+# ---------------------------------------------------------------------------
+
+SUBMIT_FIXTURE = FIXTURES / "submit.abap"
+
+
+def test_extract_abap_submit_emits_submits_edges():
+    result = extract_abap(SUBMIT_FIXTURE)
+    sub_edges = [e for e in result["edges"] if e["relation"] == "submits"]
+    assert len(sub_edges) >= 1
+
+
+def test_extract_abap_submit_edge_confidence():
+    result = extract_abap(SUBMIT_FIXTURE)
+    for edge in result["edges"]:
+        if edge["relation"] == "submits":
+            assert edge["confidence"] == "EXTRACTED"
+
+
+def test_extract_abap_submit_only_z_targets():
+    """SUBMIT sapmv45a (SAP standard) must not generate a stub or edge."""
+    result = extract_abap(SUBMIT_FIXTURE)
+    sap_nid = _make_id("abap_prog", "SAPMV45A")
+    assert all(e["target"] != sap_nid for e in result["edges"] if e["relation"] == "submits")
+
+
+def test_extract_abap_submit_stub_has_no_source_location():
+    result = extract_abap(SUBMIT_FIXTURE)
+    tgt_nid = _make_id("abap_prog", "ZREPORT_SALES")
+    stub = next((n for n in result["nodes"] if n["id"] == tgt_nid), None)
+    assert stub is not None
+    assert stub["source_location"] is None
+
+
+def test_extract_abap_submit_deterministic_ids():
+    r1 = extract_abap(SUBMIT_FIXTURE)
+    r2 = extract_abap(SUBMIT_FIXTURE)
+    assert {n["id"] for n in r1["nodes"]} == {n["id"] for n in r2["nodes"]}
+
