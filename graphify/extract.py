@@ -11611,6 +11611,68 @@ def extract_abap(path: Path) -> dict:
                                       "relation": "submits", "confidence": "EXTRACTED",
                                       "source_file": str_path, "source_location": f"L{line}"})
 
+        elif ntype in ("events_declaration", "class_events_declaration"):
+            # Event names don't follow Z/Y convention; inherit kind from the containing class.
+            evt_kind = _kind(cls_name) if cls_name else "sap_standard"
+            for child in node.children:
+                if child.type == "event_spec":
+                    name_node = child.child_by_field_name("name")
+                    if name_node:
+                        evt = _text(name_node).upper()
+                        if evt:
+                            enid = _make_id("abap_event", evt)
+                            _ensure(enid, f"EVENT {evt}", line, evt_kind)
+                            _contains_edge(owner, enid)
+
+        elif ntype == "raise_event_statement":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                evt = _text(name_node).upper()
+                if evt:
+                    tgt = _make_id("abap_event", evt)
+                    # Event names don't follow Z/Y convention; inherit kind from class context.
+                    _ensure_stub(tgt, f"EVENT {evt}", _kind(cls_name) if cls_name else _kind(evt))
+                    key = (owner, tgt, "raises")
+                    if key not in seen_edges and owner != tgt:
+                        seen_edges.add(key)
+                        edges.append({"source": owner, "target": tgt,
+                                      "relation": "raises", "confidence": "EXTRACTED",
+                                      "source_file": str_path, "source_location": f"L{line}"})
+
+        elif ntype == "set_handler_statement":
+            # Only resolvable statically when subject is ME (same class).
+            for i, child in enumerate(node.children):
+                if node.field_name_for_child(i) == "handlers":
+                    subj = child.child_by_field_name("subject")
+                    comp = child.child_by_field_name("component")
+                    if subj and comp and _text(subj).upper() == "ME" and cls_name:
+                        meth = _text(comp).upper()
+                        tgt = _make_id(stem, cls_name, meth)
+                        _ensure_stub(tgt, f"{cls_name}->{meth}", _kind(cls_name))
+                        _uses_edge(owner, tgt, "INFERRED", line)
+
+        elif ntype == "get_badi_statement":
+            type_node = node.child_by_field_name("type")
+            if type_node:
+                intf = _text(type_node).upper()
+                if intf:
+                    tgt = _make_id("abap_intf", intf)
+                    _ensure_stub(tgt, f"INTERFACE {intf}", _kind(intf))
+                    _uses_edge(owner, tgt, "INFERRED", line)
+
+        elif ntype == "call_badi_statement":
+            # CALL BADI var->method — target class resolved at runtime via BADI registry.
+            # We emit a stub for the method name only; reconciliation with the real
+            # implementation class requires BADI registration data (out of scope here).
+            method_node = node.child_by_field_name("method")
+            if method_node:
+                comp = method_node.child_by_field_name("component")
+                if comp:
+                    meth = _text(comp).upper()
+                    tgt = _make_id("abap_badi_method", meth)
+                    _ensure_stub(tgt, f"BADI->{meth}", "sap_standard")
+                    _call_edge(owner, tgt, "INFERRED", line)
+
         elif ntype == "method_call":
             src_node = node.child_by_field_name("source")
             name_node = node.child_by_field_name("name")

@@ -353,3 +353,78 @@ def test_extract_abap_submit_deterministic_ids():
     r2 = extract_abap(SUBMIT_FIXTURE)
     assert {n["id"] for n in r1["nodes"]} == {n["id"] for n in r2["nodes"]}
 
+
+# ---------------------------------------------------------------------------
+# Events, RAISE EVENT, SET HANDLER, GET BADI, CALL BADI (events_badi.abap)
+# ---------------------------------------------------------------------------
+
+EB_FIXTURE = FIXTURES / "events_badi.abap"
+
+
+def test_extract_abap_events_declaration_node():
+    result = extract_abap(EB_FIXTURE)
+    labels = [n["label"] for n in result["nodes"]]
+    assert "EVENT BUTTON_CLICKED" in labels
+    assert "EVENT CLASS_INITIALIZED" in labels
+
+
+def test_extract_abap_event_node_inherits_class_kind():
+    """Events inside a Z class must have kind z_custom, not sap_standard."""
+    result = extract_abap(EB_FIXTURE)
+    node = next((n for n in result["nodes"] if n["label"] == "EVENT BUTTON_CLICKED"), None)
+    assert node is not None
+    assert node["kind"] == "z_custom"
+
+
+def test_extract_abap_event_node_contained_in_class():
+    result = extract_abap(EB_FIXTURE)
+    cls_nid = _make_id("abap_cls", "ZCL_BUTTON")
+    evt_nid = _make_id("abap_event", "BUTTON_CLICKED")
+    contains = [e for e in result["edges"]
+                if e["relation"] == "contains" and e["source"] == cls_nid and e["target"] == evt_nid]
+    assert len(contains) == 1
+
+
+def test_extract_abap_raise_event_edge():
+    result = extract_abap(EB_FIXTURE)
+    raises = [e for e in result["edges"] if e["relation"] == "raises"]
+    assert len(raises) >= 1
+    assert raises[0]["confidence"] == "EXTRACTED"
+
+
+def test_extract_abap_raise_event_source_is_method():
+    """RAISE EVENT must come from the method that raises it, not the class."""
+    result = extract_abap(EB_FIXTURE)
+    method_nid = next(
+        (n["id"] for n in result["nodes"] if "ZCL_BUTTON->CLICK" in n["label"].upper()), None
+    )
+    evt_nid = _make_id("abap_event", "BUTTON_CLICKED")
+    raises = [e for e in result["edges"]
+              if e["relation"] == "raises" and e["source"] == method_nid and e["target"] == evt_nid]
+    assert len(raises) == 1
+
+
+def test_extract_abap_get_badi_uses_interface():
+    """GET BADI TYPE zif_ex_my_badi must emit uses INFERRED edge to the interface."""
+    result = extract_abap(EB_FIXTURE)
+    intf_nid = _make_id("abap_intf", "ZIF_EX_MY_BADI")
+    uses = [e for e in result["edges"]
+            if e["relation"] == "uses" and e["target"] == intf_nid]
+    assert len(uses) >= 1
+    assert all(e["confidence"] == "INFERRED" for e in uses)
+
+
+def test_extract_abap_call_badi_edge():
+    """CALL BADI must emit a calls INFERRED edge to a BADI method stub."""
+    result = extract_abap(EB_FIXTURE)
+    badi_edges = [e for e in result["edges"]
+                  if e["relation"] == "calls" and "BADI" in e["target"].upper()]
+    assert len(badi_edges) >= 1
+    assert badi_edges[0]["confidence"] == "INFERRED"
+
+
+def test_extract_abap_events_badi_deterministic_ids():
+    r1 = extract_abap(EB_FIXTURE)
+    r2 = extract_abap(EB_FIXTURE)
+    assert {n["id"] for n in r1["nodes"]} == {n["id"] for n in r2["nodes"]}
+
