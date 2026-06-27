@@ -93,7 +93,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | `calls` | `EXTRACTED` | `CALL FUNCTION "..."`, `call_badi_statement` |
 | `calls` | `INFERRED` | method `->` / `=>` call, `PERFORM`, `CALL METHOD` |
 | `submits` | `EXTRACTED` | `SUBMIT <prog>` (static, Z/Y only; dynamic skipped) |
-| `uses` | `INFERRED` | `TYPE REF TO`, `NEW`, `CREATE OBJECT`, `GET BADI TYPE`, `SET HANDLER me->` |
+| `uses` | `INFERRED` | `TYPE REF TO`, `NEW`, `CREATE OBJECT`, `GET BADI TYPE`, `SET HANDLER me->`, static `ZCL=>METHOD()` → class node |
 | `raises` | `EXTRACTED` | `RAISE EVENT <name>` |
 | `launches` | `EXTRACTED` | `.tran.xml` TCODE → program (Z/Y only) |
 
@@ -121,7 +121,19 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 
 **Stub nodes:** cross-file references create lightweight placeholder nodes via `_ensure_stub()` with `source_file=""` and `source_location=None`. When the definition file is processed, `G.add_node()` overwrites the stub with real values. `source_location=None` signals `mark_dead_candidates` to skip stubs.
 
+**Instance call resolution (pre-pass):** before the main AST traversal, a pre-pass builds `var_type: dict[str, str]` by scanning all `data_spec` nodes in the file for `typing → reference_type → ref_to → identifier`. Only Z/Y-prefixed class names are recorded. This map is used to resolve `lo_var->METHOD()` calls: if `lo_var` is in the map its class is used; otherwise the call is silently skipped. Variables declared as `TYPE REF TO ZIF_*` (interface references) are not tracked and their calls go unresolved — see Known Limitations below.
+
+**Static call → class edge:** `ZCL_FOO=>METHOD()` emits two edges: a `calls INFERRED` to the method stub and a `uses INFERRED` to the `abap_cls_*` node. The second edge is needed so `mark_dead_candidates()` sees non-zero cross-file in-degree on the class node even when no other reference type reaches it.
+
 **ID global vs file-scoped — method IDs:** all method nodes use a global scheme (`abap_method_*`) independent of which file is being processed. This ensures that a stub created by a caller in `zcl_bar.abap` (via `SET HANDLER me->m` or a static `ZCL_FOO=>m` call) shares the same ID as the definition in `zcl_foo.abap`, enabling cross-file in-degree counting in `mark_dead_candidates`. FORMs remain file-scoped (`<stem>_<name>`) because FORM names are not globally unique.
+
+**Known limitations of static analysis:**
+
+| Limitation | Impact | Workaround / future fix |
+|---|---|---|
+| Interface-typed variables (`TYPE REF TO ZIF_*`) not resolved | `lo_svc->method()` where `lo_svc` is typed to an interface produces no edge; implementing class methods may appear as `dead_candidate` | Would require mapping ZIF→implementing ZCL, out of scope for static analysis |
+| Chained calls (`ZCL_A=>get( )->method( )`) silently skipped | No edge emitted for the right-hand call | Requires evaluating return types; out of scope |
+| Pre-pass has no scope awareness | If a variable is declared twice with different types (shadowing), the last declaration wins for the whole file | Very rare in ABAP; acceptable approximation |
 
 ### extract_tran()
 
