@@ -304,7 +304,8 @@ def test_gemini_install_references_all_resolve(tmp_path):
     """
     import re
     _install(tmp_path, "gemini")
-    skill = tmp_path / ".gemini" / "skills" / "graphify" / "SKILL.md"
+    # gemini installs under .agents/skills/ (same as generic agents platforms)
+    skill = tmp_path / ".agents" / "skills" / "graphify" / "SKILL.md"
     assert skill.exists()
     refdir = skill.parent / "references"
     assert refdir.is_dir()

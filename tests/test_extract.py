@@ -1,8 +1,15 @@
 import json
 import os
+import sys
 from collections import Counter
 from pathlib import Path
+import pytest
 from graphify.extract import extract_python, extract, collect_files, _make_id, extract_bash, extract_json, _DISPATCH
+
+_symlink_required = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlink creation requires elevated privileges or Developer Mode on Windows",
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -216,7 +223,8 @@ def test_collect_files_from_dir():
     from graphify.extract import _DISPATCH
     files = collect_files(FIXTURES)
     supported = set(_DISPATCH.keys())
-    assert all(f.suffix in supported for f in files)
+    # .tran.xml files are included via compound-extension check, not via _DISPATCH suffix
+    assert all(f.suffix in supported or f.name.endswith(".tran.xml") for f in files)
     assert len(files) > 0
 
 
@@ -226,6 +234,7 @@ def test_collect_files_skips_hidden():
         assert not any(part.startswith(".") for part in f.parts)
 
 
+@_symlink_required
 def test_collect_files_follows_symlinked_directory(tmp_path):
     real_dir = tmp_path / "real_src"
     real_dir.mkdir()
@@ -239,6 +248,7 @@ def test_collect_files_follows_symlinked_directory(tmp_path):
     assert [f.name for f in files_yes].count("lib.py") == 2
 
 
+@_symlink_required
 def test_collect_files_handles_circular_symlinks(tmp_path):
     sub = tmp_path / "pkg"
     sub.mkdir()
@@ -255,13 +265,26 @@ def _legacy_collect_files(target, *, root=None):
     extensions = set(_DISPATCH.keys())
     ignore_root = root if root is not None else target
     patterns = _load_graphifyignore(ignore_root)
+    seen: set = set()
     results = []
     for ext in sorted(extensions):
-        results.extend(
-            p for p in target.rglob(f"*{ext}")
-            if not any(_is_noise_dir(part) for part in p.parts)
+        for p in target.rglob(f"*{ext}"):
+            if (
+                not any(_is_noise_dir(part) for part in p.parts)
+                and not (patterns and _is_ignored(p, ignore_root, patterns))
+                and p not in seen
+            ):
+                seen.add(p)
+                results.append(p)
+    # .tran.xml files use compound-extension check in collect_files, not a _DISPATCH entry
+    for p in target.rglob("*.tran.xml"):
+        if (
+            not any(_is_noise_dir(part) for part in p.parts)
             and not (patterns and _is_ignored(p, ignore_root, patterns))
-        )
+            and p not in seen
+        ):
+            seen.add(p)
+            results.append(p)
     return sorted(results)
 
 

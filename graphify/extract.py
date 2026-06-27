@@ -11772,6 +11772,21 @@ def extract_abap(path: Path) -> dict:
                     _ensure_stub(tgt, f"CLASS {cls} DEFINITION", _kind(cls))
                     _uses_edge(owner, tgt, "INFERRED", line)
 
+        elif ntype == "raise_exception_statement":
+            # RAISE EXCEPTION TYPE zcx_xxx → new_exception_spec child has field class_name.
+            # RAISE EXCEPTION NEW zcx_xxx( ) → general_expression child contains new_expression,
+            # handled automatically by the new_expression branch via default child push below.
+            for _rchild in node.children:
+                if _rchild.type == "new_exception_spec":
+                    cls_node = _rchild.child_by_field_name("class_name")
+                    if cls_node:
+                        cls = _text(cls_node).upper()
+                        if cls:
+                            tgt = _make_id("abap_cls", cls)
+                            _ensure_stub(tgt, f"CLASS {cls} DEFINITION", _kind(cls))
+                            _uses_edge(owner, tgt, "INFERRED", line)
+                    break
+
         elif ntype == "ERROR":
             # CREATE OBJECT lo_x TYPE <class>  (parsed as ERROR by tree-sitter-abap)
             raw = _text(node).upper()

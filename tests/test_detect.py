@@ -1,7 +1,14 @@
+import sys
 import unicodedata
 from pathlib import Path
+import pytest
 from graphify.detect import classify_file, count_words, detect, detect_incremental, save_manifest, FileType, _looks_like_paper, _is_ignored, _load_graphifyignore, _is_sensitive
 from graphify import detect as detect_mod
+
+_symlink_required = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlink creation requires elevated privileges or Developer Mode on Windows",
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -122,6 +129,7 @@ def test_graphifyignore_comments_ignored(tmp_path):
     assert any("other.py" in f for f in result["files"]["code"])
 
 
+@_symlink_required
 def test_detect_follows_symlinked_directory(tmp_path):
     real_dir = tmp_path / "real_lib"
     real_dir.mkdir()
@@ -136,6 +144,7 @@ def test_detect_follows_symlinked_directory(tmp_path):
     assert any("linked_lib" in f for f in result_yes["files"]["code"])
 
 
+@_symlink_required
 def test_detect_follows_symlinked_file(tmp_path):
     (tmp_path / "real.py").write_text("x = 1")
     (tmp_path / "link.py").symlink_to(tmp_path / "real.py")
@@ -218,6 +227,7 @@ def test_graphifyignore_at_git_root_is_included(tmp_path):
     assert result["graphifyignore_patterns"] == 1
 
 
+@_symlink_required
 def test_detect_handles_circular_symlinks(tmp_path):
     sub = tmp_path / "a"
     sub.mkdir()
@@ -228,6 +238,7 @@ def test_detect_handles_circular_symlinks(tmp_path):
     assert any("main.py" in f for f in result["files"]["code"])
 
 
+@_symlink_required
 def test_detect_auto_detects_direct_symlink_child(tmp_path):
     """When ``root`` has a direct symlinked child, default (None) follows symlinks
     so the user does not have to know to pass follow_symlinks=True for "fake
@@ -256,6 +267,7 @@ def test_detect_default_does_not_follow_when_no_symlinks(tmp_path):
     assert any("other.py" in f for f in result["files"]["code"])
 
 
+@_symlink_required
 def test_detect_explicit_false_overrides_auto_detect(tmp_path):
     """An explicit follow_symlinks=False overrides the auto-detect, even when
     root contains symlinks. Lets callers opt out of the new behaviour."""
@@ -269,6 +281,7 @@ def test_detect_explicit_false_overrides_auto_detect(tmp_path):
     assert not any("linked_lib" in f for f in result["files"]["code"])
 
 
+@_symlink_required
 def test_detect_incremental_propagates_follow_symlinks(tmp_path, monkeypatch):
     """detect_incremental must forward follow_symlinks so symlinked sub-trees
     appear in incremental scans the same way they appear in full scans."""

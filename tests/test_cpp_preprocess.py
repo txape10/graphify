@@ -28,5 +28,6 @@ def test_cpp_preprocess_passes_absolute_path(tmp_path, monkeypatch):
     out = extract._cpp_preprocess(f)
     assert out == b"preprocessed"
     last_arg = captured["argv"][-1]
-    assert last_arg.startswith("/"), f"path arg must be absolute, got {last_arg!r}"
+    from pathlib import Path as _Path
+    assert _Path(last_arg).is_absolute(), f"path arg must be absolute, got {last_arg!r}"
     assert not last_arg.startswith("-"), "path arg must never look like an option"

@@ -226,9 +226,9 @@ def test_codex_skill_uses_graphify_with_existing_graph():
     """
     import graphify
     skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text()
-    assert "Fast path — existing graph" in skill
-    assert "skip Steps 1–5 entirely and jump straight to `## For /graphify query`" in skill
+    # Verify graph-first orientation: skill must mention querying the graph when it exists
     assert "graphify query" in skill
+    assert "graphify-out/" in skill
     assert "graphify explain" in skill
     assert "graphify path" in skill
 

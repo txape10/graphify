@@ -520,3 +520,41 @@ def test_extract_abap_instance_call_untyped_var_ignored():
     assert len(edges_to_unknown) == 0, (
         f"Untyped variable call must be silently ignored, got {edges_to_unknown}"
     )
+
+
+# ---------------------------------------------------------------------------
+# RAISE EXCEPTION — Bug 4 (no uses edge to exception class)
+# ---------------------------------------------------------------------------
+
+EXC_FIXTURE = FIXTURES / "exceptions.abap"
+
+
+def test_extract_abap_raise_exception_type_emits_uses_edge():
+    """RAISE EXCEPTION TYPE zcx_xxx must emit uses INFERRED to the exception class."""
+    result = extract_abap(EXC_FIXTURE)
+    tgt = _make_id("abap_cls", "ZCX_VALE_ERROR")
+    uses_edges = [e for e in result["edges"]
+                  if e["relation"] == "uses" and e["target"] == tgt]
+    assert len(uses_edges) >= 1, (
+        "RAISE EXCEPTION TYPE must emit at least one uses edge to the exception class"
+    )
+    assert all(e["confidence"] == "INFERRED" for e in uses_edges)
+
+
+def test_extract_abap_raise_exception_new_emits_uses_edge():
+    """RAISE EXCEPTION NEW zcx_xxx( ) must emit uses INFERRED to the exception class."""
+    result = extract_abap(EXC_FIXTURE)
+    tgt = _make_id("abap_cls", "ZCX_VALE_ERROR")
+    uses_edges = [e for e in result["edges"]
+                  if e["relation"] == "uses" and e["target"] == tgt]
+    # Both TYPE and NEW forms target the same class; combined they produce at least one edge.
+    assert len(uses_edges) >= 1
+
+
+def test_extract_abap_raise_exception_stub_has_no_source_location():
+    """Exception class stub created by RAISE must have source_location=None."""
+    result = extract_abap(EXC_FIXTURE)
+    tgt_id = _make_id("abap_cls", "ZCX_VALE_ERROR")
+    stub = next((n for n in result["nodes"] if n["id"] == tgt_id), None)
+    assert stub is not None, "Stub node for ZCX_VALE_ERROR must be present"
+    assert stub["source_location"] is None

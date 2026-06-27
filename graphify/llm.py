@@ -456,9 +456,9 @@ def _read_files(paths: list[Path], root: Path) -> str:
     parts: list[str] = []
     for p in paths:
         try:
-            rel = str(p.relative_to(root))
+            rel = p.relative_to(root).as_posix()
         except ValueError:
-            rel = str(p)
+            rel = p.as_posix()
         try:
             content = _file_to_text(p)
         except OSError:
@@ -551,9 +551,9 @@ def _build_image_refs(image_files: list[Path], root: Path, *, read_bytes: bool =
     refs: list[_ImageRef] = []
     for p in image_files:
         try:
-            rel = str(p.relative_to(root))
+            rel = p.relative_to(root).as_posix()
         except ValueError:
-            rel = str(p)
+            rel = p.as_posix()
         media = _IMAGE_MEDIA_TYPES.get(p.suffix.lower(), "image/png")
         raw: bytes | None = None
         if read_bytes:

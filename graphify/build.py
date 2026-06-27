@@ -294,20 +294,34 @@ def build_from_json(extraction: dict, *, directed: bool = False, root: str | Pat
     hyperedges = extraction.get("hyperedges", [])
     if hyperedges:
         G.graph["hyperedges"] = hyperedges
-    mark_dead_candidates(G)
+    mark_dead_candidates(G, corpus_root=root)
     return G
 
 
-def mark_dead_candidates(G: nx.Graph) -> None:
+def mark_dead_candidates(G: nx.Graph, corpus_root: "str | Path | None" = None) -> None:
     """Mark ABAP nodes as dead_candidate=True when cross-file in-degree is 0.
 
     Conservative: false negatives preferred over false positives.
     Targets: Z/Y class definitions, their methods, Z/Y-prefixed .prog.abap includes.
     Excludes: reports, function groups, FORMs, local/test classes, SAP-standard objects,
     stub nodes (no source_location).
+
+    corpus_root: if given, loads <corpus_root>/.graphify_known_alive (one object name per
+    line, case-insensitive, # comments ignored). Objects listed there are never marked
+    dead_candidate regardless of in-degree — use for objects called from outside the corpus
+    (Smartforms, RFC from external systems, CMOD exits, etc.).
     """
     import re as _re
     from pathlib import Path as _Path
+
+    known_alive: set[str] = set()
+    if corpus_root is not None:
+        _known_alive_path = _Path(corpus_root) / ".graphify_known_alive"
+        if _known_alive_path.is_file():
+            for _line in _known_alive_path.read_text(encoding="utf-8").splitlines():
+                _entry = _line.split("#", 1)[0].strip()
+                if _entry:
+                    known_alive.add(_entry.upper())
 
     _Z_CLASS_RE = _re.compile(r"^CLASS\s+[ZY]\w+\s+DEFINITION$", _re.IGNORECASE)
     _Z_METHOD_RE = _re.compile(r"^[ZY]\w+(?:->|=>)\w+$", _re.IGNORECASE)
@@ -354,6 +368,11 @@ def mark_dead_candidates(G: nx.Graph) -> None:
             continue
 
         if _Z_CLASS_RE.match(label) or _Z_METHOD_RE.match(label):
+            if known_alive:
+                # Extract first Z/Y identifier from label (e.g. "CLASS ZCL_FOO DEFINITION" → "ZCL_FOO")
+                _m = _re.search(r"\b([ZY]\w+)", label, _re.IGNORECASE)
+                if _m and _m.group(1).upper() in known_alive:
+                    continue
             G.nodes[nid]["dead_candidate"] = True
         elif source_file.endswith(".prog.abap"):
             # Only mark if label matches the base name (strip compound extension ".prog.abap").
@@ -361,7 +380,8 @@ def mark_dead_candidates(G: nx.Graph) -> None:
             # the file they were found in, while keeping genuine Z/Y include nodes.
             base = _Path(source_file).name[: -len(".prog.abap")]
             if (label.startswith("Z") or label.startswith("Y")) and label.upper() == base.upper():
-                G.nodes[nid]["dead_candidate"] = True
+                if not (known_alive and label.upper() in known_alive):
+                    G.nodes[nid]["dead_candidate"] = True
 
 
 def build(

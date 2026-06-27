@@ -474,3 +474,75 @@ class TestExcludeDead:
         assert "ZCL_DEAD" not in result_with or "No matching" in result_with
         # Without exclude_dead it should appear
         assert "ZCL_DEAD" in result_without or "No matching" in result_without
+
+
+# ---------------------------------------------------------------------------
+# .graphify_known_alive — Bug 5 (callers outside corpus)
+# ---------------------------------------------------------------------------
+
+class TestKnownAlive:
+
+    def _dead_class_graph(self):
+        """A Z class with no cross-file callers — would normally be dead_candidate."""
+        return _make_graph([
+            {"id": "cls1", "label": "CLASS ZCL_GET_LOGO DEFINITION",
+             "source_file": "zcl_get_logo.abap", "source_location": "L1"},
+        ])
+
+    def test_known_alive_prevents_dead_marking(self, tmp_path):
+        """Object listed in .graphify_known_alive must not be marked dead_candidate."""
+        known_alive = tmp_path / ".graphify_known_alive"
+        known_alive.write_text("ZCL_GET_LOGO\n", encoding="utf-8")
+        G = self._dead_class_graph()
+        mark_dead_candidates(G, corpus_root=tmp_path)
+        assert not G.nodes["cls1"].get("dead_candidate"), (
+            "ZCL_GET_LOGO is in known_alive — must not be marked dead_candidate"
+        )
+
+    def test_without_known_alive_still_marks_dead(self, tmp_path):
+        """Without .graphify_known_alive the normal dead marking must still apply."""
+        G = self._dead_class_graph()
+        mark_dead_candidates(G, corpus_root=tmp_path)
+        assert G.nodes["cls1"].get("dead_candidate") is True
+
+    def test_known_alive_case_insensitive(self, tmp_path):
+        """Known-alive matching must be case-insensitive."""
+        known_alive = tmp_path / ".graphify_known_alive"
+        known_alive.write_text("zcl_get_logo\n", encoding="utf-8")
+        G = self._dead_class_graph()
+        mark_dead_candidates(G, corpus_root=tmp_path)
+        assert not G.nodes["cls1"].get("dead_candidate")
+
+    def test_known_alive_ignores_comments_and_blanks(self, tmp_path):
+        """Lines starting with # and blank lines in known_alive must be ignored."""
+        known_alive = tmp_path / ".graphify_known_alive"
+        known_alive.write_text(
+            "# this is a comment\n\nZCL_GET_LOGO\n# another comment\n",
+            encoding="utf-8",
+        )
+        G = self._dead_class_graph()
+        mark_dead_candidates(G, corpus_root=tmp_path)
+        assert not G.nodes["cls1"].get("dead_candidate")
+
+    def test_known_alive_file_absent_no_error(self, tmp_path):
+        """If .graphify_known_alive does not exist, mark_dead_candidates must not raise."""
+        G = self._dead_class_graph()
+        mark_dead_candidates(G, corpus_root=tmp_path)  # file absent
+        assert G.nodes["cls1"].get("dead_candidate") is True
+
+    def test_known_alive_corpus_root_none_no_error(self):
+        """corpus_root=None (default) must behave exactly as before — no file loaded."""
+        G = self._dead_class_graph()
+        mark_dead_candidates(G)  # no corpus_root
+        assert G.nodes["cls1"].get("dead_candidate") is True
+
+    def test_known_alive_method_under_known_class(self, tmp_path):
+        """Methods of a known-alive class must also be excluded from dead marking."""
+        known_alive = tmp_path / ".graphify_known_alive"
+        known_alive.write_text("ZCL_GET_LOGO\n", encoding="utf-8")
+        G = _make_graph([
+            {"id": "m1", "label": "ZCL_GET_LOGO->GET_DATA",
+             "source_file": "zcl_get_logo.abap", "source_location": "L5"},
+        ])
+        mark_dead_candidates(G, corpus_root=tmp_path)
+        assert not G.nodes["m1"].get("dead_candidate")
