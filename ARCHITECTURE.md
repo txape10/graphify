@@ -93,7 +93,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | `calls` | `EXTRACTED` | `CALL FUNCTION "..."`, `call_badi_statement` |
 | `calls` | `INFERRED` | method `->` / `=>` call, `PERFORM`, `CALL METHOD` |
 | `submits` | `EXTRACTED` | `SUBMIT <prog>` (static, Z/Y only; dynamic skipped) |
-| `uses` | `INFERRED` | `TYPE REF TO`, `NEW`, `CREATE OBJECT`, `GET BADI TYPE`, `SET HANDLER me->`, static `ZCL=>METHOD()` → class node |
+| `uses` | `INFERRED` | `TYPE REF TO`, `NEW`, `CREATE OBJECT`, `GET BADI TYPE`, `SET HANDLER me->`, static `ZCL=>METHOD()` → class node, `RAISE EXCEPTION TYPE zcx_xxx` → exception class node |
 | `raises` | `EXTRACTED` | `RAISE EVENT <name>` |
 | `launches` | `EXTRACTED` | `.tran.xml` TCODE → program (Z/Y only) |
 
@@ -134,6 +134,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | Interface-typed variables (`TYPE REF TO ZIF_*`) not resolved | `lo_svc->method()` where `lo_svc` is typed to an interface produces no edge; implementing class methods may appear as `dead_candidate` | Would require mapping ZIF→implementing ZCL, out of scope for static analysis |
 | Chained calls (`ZCL_A=>get( )->method( )`) silently skipped | No edge emitted for the right-hand call | Requires evaluating return types; out of scope |
 | Pre-pass has no scope awareness | If a variable is declared twice with different types (shadowing), the last declaration wins for the whole file | Very rare in ABAP; acceptable approximation |
+| Callers outside the corpus (Smartforms, RFC, CMOD exits) | Z objects called only from SAP-standard auto-generated code appear with zero in-degree → `dead_candidate: true` | List known-alive objects in `<corpus_root>/.graphify_known_alive` (one name per line, case-insensitive, `#` comments ignored) |
 
 ### extract_tran()
 
