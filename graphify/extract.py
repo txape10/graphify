@@ -11490,6 +11490,31 @@ def extract_abap(path: Path) -> dict:
                           "source_file": "", "source_location": None,
                           "kind": kind})
 
+    # Pre-pass: build variable → class type map for resolving instance calls (var->method).
+    # Only Z/Y classes are tracked since mark_dead_candidates only targets Z/Y objects.
+    # Uses data_spec field "name" (variable) and "typing" (reference_type) — verified against
+    # the tree-sitter-abap grammar.
+    var_type: dict[str, str] = {}
+    _prepass_stack = [root]
+    while _prepass_stack:
+        _pnode = _prepass_stack.pop()
+        if _pnode.type == "data_spec":
+            _vname_node = _pnode.child_by_field_name("name")
+            _typing_node = _pnode.child_by_field_name("typing")
+            if _vname_node and _typing_node and _typing_node.type == "reference_type":
+                _var = _text(_vname_node).upper()
+                for _rt_child in _typing_node.children:
+                    if _rt_child.type == "ref_to":
+                        for _ident in _rt_child.children:
+                            if _ident.type == "identifier":
+                                _cls = _text(_ident).upper()
+                                if _cls and _cls[0] in ("Z", "Y"):
+                                    var_type[_var] = _cls
+                                break
+                        break
+        else:
+            _prepass_stack.extend(_pnode.children)
+
     # Stack items: (node, owner_nid, cls_name_upper)
     # owner_nid — source for call edges in the current scope
     # cls_name  — class name to scope method IDs (empty outside a class impl)
@@ -11674,14 +11699,41 @@ def extract_abap(path: Path) -> dict:
                     _call_edge(owner, tgt, "INFERRED", line)
 
         elif ntype == "method_call":
-            src_node = node.child_by_field_name("source")
+            # The grammar stores both the class/var identifier AND the operator (=> or ->)
+            # as "source" field children. child_by_field_name("source") returns only the
+            # first one (the identifier, without the operator), so we must iterate all
+            # source children to detect the operator by child.type.
             name_node = node.child_by_field_name("name")
-            if src_node and name_node and "=>" in _text(src_node):
-                cls_ref = _text(src_node).replace("=>", "").strip().upper()
-                meth = _text(name_node).upper()
-                tgt = _make_id("abap_method", cls_ref, meth)
-                _ensure_stub(tgt, f"{cls_ref}=>{meth}", _kind(cls_ref))
-                _call_edge(owner, tgt, "INFERRED", line)
+            if name_node:
+                _op = None
+                _cls_or_var = None
+                for _mi, _mc in enumerate(node.children):
+                    if node.field_name_for_child(_mi) == "source":
+                        if _mc.type in ("=>", "->"):
+                            _op = _mc.type
+                        elif _mc.type == "identifier" and _cls_or_var is None:
+                            _cls_or_var = _text(_mc).upper()
+                if _op and _cls_or_var:
+                    meth = _text(name_node).upper()
+                    if _op == "=>":
+                        # Static call: ZCL_CLASS=>METHOD — known class
+                        tgt = _make_id("abap_method", _cls_or_var, meth)
+                        _ensure_stub(tgt, f"{_cls_or_var}=>{meth}", _kind(_cls_or_var))
+                        _call_edge(owner, tgt, "INFERRED", line)
+                        # Bug 2 fix: also emit uses edge to the class so mark_dead_candidates
+                        # sees in-degree > 0 on the abap_cls_* node.
+                        _cnid = _make_id("abap_cls", _cls_or_var)
+                        _ensure_stub(_cnid, f"CLASS {_cls_or_var} DEFINITION", _kind(_cls_or_var))
+                        _uses_edge(owner, _cnid, "INFERRED", line)
+                    elif _op == "->" and _cls_or_var in var_type:
+                        # Instance call: lo_var->METHOD — resolve variable to class via pre-pass
+                        _resolved = var_type[_cls_or_var]
+                        tgt = _make_id("abap_method", _resolved, meth)
+                        _ensure_stub(tgt, f"{_resolved}->{meth}", _kind(_resolved))
+                        _call_edge(owner, tgt, "INFERRED", line)
+                        _cnid = _make_id("abap_cls", _resolved)
+                        _ensure_stub(_cnid, f"CLASS {_resolved} DEFINITION", _kind(_resolved))
+                        _uses_edge(owner, _cnid, "INFERRED", line)
 
         elif ntype == "call_method_statement":
             method_node = node.child_by_field_name("method")

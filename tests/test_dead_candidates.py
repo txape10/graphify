@@ -375,6 +375,44 @@ class TestMarkDeadCandidates:
         assert not G.nodes[prog_nid].get("dead_candidate")
         assert not G.nodes[prog_nid].get("dev_tool")
 
+    def test_class_used_only_via_static_calls_not_marked_dead(self):
+        """Clase Z usada solo por llamadas CLASS=>METHOD no debe ser dead_candidate.
+
+        Bug 2: extract_abap debe emitir edge uses a la clase además del edge calls
+        al método. mark_dead_candidates evalúa in-degree del nodo abap_cls_* — si
+        hay un edge uses cross-file, la clase no se marca dead aunque el nodo método
+        sea quien acumule los calls.
+        """
+        G = _make_graph(
+            [
+                {"id": "abap_cls_zcl_selection_screen",
+                 "label": "CLASS ZCL_SELECTION_SCREEN DEFINITION",
+                 "source_file": "zcl_selection_screen.abap", "source_location": "L1"},
+                {"id": "abap_method_zcl_selection_screen_hide_field",
+                 "label": "ZCL_SELECTION_SCREEN->HIDE_FIELD",
+                 "source_file": "zcl_selection_screen.abap", "source_location": "L10"},
+                {"id": "caller1", "label": "ZCL_CALLER->RUN",
+                 "source_file": "zcl_caller.abap", "source_location": "L5"},
+            ],
+            [
+                {"source": "caller1",
+                 "target": "abap_method_zcl_selection_screen_hide_field",
+                 "_src": "caller1",
+                 "_tgt": "abap_method_zcl_selection_screen_hide_field",
+                 "relation": "calls"},
+                {"source": "caller1",
+                 "target": "abap_cls_zcl_selection_screen",
+                 "_src": "caller1",
+                 "_tgt": "abap_cls_zcl_selection_screen",
+                 "relation": "uses"},
+            ],
+        )
+        mark_dead_candidates(G)
+        assert not G.nodes["abap_cls_zcl_selection_screen"].get("dead_candidate"), (
+            "ZCL_SELECTION_SCREEN must not be dead_candidate when it has a cross-file uses edge. "
+            "extract_abap must emit uses edge to abap_cls_* for CLASS=>METHOD calls."
+        )
+
 
 # ---------------------------------------------------------------------------
 # to_json hide_dead

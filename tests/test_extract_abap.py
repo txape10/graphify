@@ -463,3 +463,60 @@ def test_extract_abap_method_definition_uses_global_scheme():
         "Definition and caller stubs must share abap_method_ scheme for cross-file reconciliation."
     )
 
+
+# ---------------------------------------------------------------------------
+# method_call handler — Bug 1 (handler broken) + Bug 2 (no uses edge to class)
+# ---------------------------------------------------------------------------
+
+MC_FIXTURE = FIXTURES / "method_call.abap"
+
+
+def test_extract_abap_static_call_creates_method_edge():
+    """ZCL=>METHOD() must emit a calls INFERRED edge to the method stub."""
+    result = extract_abap(MC_FIXTURE)
+    tgt = _make_id("abap_method", "ZCL_TARGET_STATIC", "COMPUTE")
+    call_edges = [e for e in result["edges"]
+                  if e["relation"] == "calls" and e["target"] == tgt]
+    assert len(call_edges) == 1, f"Expected 1 calls edge to method stub, got {len(call_edges)}"
+    assert call_edges[0]["confidence"] == "INFERRED"
+
+
+def test_extract_abap_static_call_creates_uses_edge_to_class():
+    """ZCL=>METHOD() must also emit a uses INFERRED edge to the class node (Bug 2)."""
+    result = extract_abap(MC_FIXTURE)
+    cls_tgt = _make_id("abap_cls", "ZCL_TARGET_STATIC")
+    uses_edges = [e for e in result["edges"]
+                  if e["relation"] == "uses" and e["target"] == cls_tgt]
+    assert len(uses_edges) == 1, (
+        f"Expected 1 uses edge to class stub, got {len(uses_edges)}. "
+        "Static calls must emit uses edge to abap_cls_* so mark_dead_candidates sees in-degree > 0."
+    )
+    assert uses_edges[0]["confidence"] == "INFERRED"
+
+
+def test_extract_abap_instance_call_typed_var_creates_method_edge():
+    """lo_bar->METHOD() where DATA lo_bar TYPE REF TO ZCL must emit calls edge (Bug 1)."""
+    result = extract_abap(MC_FIXTURE)
+    tgt = _make_id("abap_method", "ZCL_TARGET_INSTANCE", "PROCESS")
+    call_edges = [e for e in result["edges"]
+                  if e["relation"] == "calls" and e["target"] == tgt]
+    assert len(call_edges) == 1, f"Expected 1 calls edge via typed variable, got {len(call_edges)}"
+
+
+def test_extract_abap_instance_call_typed_var_creates_uses_edge():
+    """lo_bar->METHOD() where DATA lo_bar TYPE REF TO ZCL must emit uses edge to class."""
+    result = extract_abap(MC_FIXTURE)
+    cls_tgt = _make_id("abap_cls", "ZCL_TARGET_INSTANCE")
+    uses_edges = [e for e in result["edges"]
+                  if e["relation"] == "uses" and e["target"] == cls_tgt]
+    assert len(uses_edges) == 1, f"Expected 1 uses edge to resolved class, got {len(uses_edges)}"
+
+
+def test_extract_abap_instance_call_untyped_var_ignored():
+    """lo_unknown->METHOD() with no TYPE REF TO declaration must not create any edges."""
+    result = extract_abap(MC_FIXTURE)
+    edges_to_unknown = [e for e in result["edges"]
+                        if "unknown" in e.get("target", "").lower()]
+    assert len(edges_to_unknown) == 0, (
+        f"Untyped variable call must be silently ignored, got {edges_to_unknown}"
+    )
