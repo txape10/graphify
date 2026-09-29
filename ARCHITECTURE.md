@@ -94,6 +94,8 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | `calls` | `INFERRED` | method `->` / `=>` call, `PERFORM`, `CALL METHOD` |
 | `submits` | `EXTRACTED` | `SUBMIT <prog>` (static, Z/Y only; dynamic skipped) |
 | `uses` | `INFERRED` | `TYPE REF TO`, `NEW`, `CREATE OBJECT`, `GET BADI TYPE`, `SET HANDLER me->`, static `ZCL=>METHOD()` → class node, `RAISE EXCEPTION TYPE zcx_xxx` → exception class node |
+| `selects_from` | `EXTRACTED` | Open SQL read (`SELECT ... FROM`/`JOIN`) → `ddic_tabl_<table>` stub (text scan, not AST) |
+| `writes_to` | `EXTRACTED` / `INFERRED` | `INSERT`/`UPDATE`/`MODIFY`/`DELETE` on a DB table → `ddic_tabl_<table>` stub; INFERRED for `MODIFY/DELETE t FROM wa` (ambiguous with itabs) |
 | `raises` | `EXTRACTED` | `RAISE EVENT <name>` |
 | `launches` | `EXTRACTED` | `.tran.xml` TCODE → program (Z/Y only) |
 

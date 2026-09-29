@@ -558,3 +558,119 @@ def test_extract_abap_raise_exception_stub_has_no_source_location():
     stub = next((n for n in result["nodes"] if n["id"] == tgt_id), None)
     assert stub is not None, "Stub node for ZCX_VALE_ERROR must be present"
     assert stub["source_location"] is None
+
+
+# ---------------------------------------------------------------------------
+# Open SQL → ddic_tabl_* edges (selects_from / writes_to)
+# ---------------------------------------------------------------------------
+
+OPEN_SQL = FIXTURES / "open_sql.abap"
+_SQL_RELS = ("selects_from", "writes_to")
+
+
+def _sql_edges(result: dict) -> dict[tuple[str, str, str], dict]:
+    return {
+        (e["source"], e["target"], e["relation"]): e
+        for e in result["edges"] if e["relation"] in _SQL_RELS
+    }
+
+
+def _m(name: str) -> str:
+    return _make_id("abap_method", "ZCL_SQL_DEMO", name)
+
+
+def _t(name: str) -> str:
+    return "ddic_tabl_" + name
+
+
+def test_sql_reads_per_method():
+    edges = _sql_edges(extract_abap(OPEN_SQL))
+    read = _m("read_log")
+    for tbl in ("lfa1", "ztest_log_h", "vbap", "ztest_log_m", "ztest_log_r",
+                "ztest_log_e", "ztest_log_sub", "nast"):
+        e = edges.get((read, _t(tbl), "selects_from"))
+        assert e is not None, tbl
+        assert e["confidence"] == "EXTRACTED"
+
+
+def test_sql_writes_per_method_and_confidence():
+    edges = _sql_edges(extract_abap(OPEN_SQL))
+    save, clean = _m("save_log"), _m("clean_up")
+    expected = {
+        (save, "ztest_log_h"): "EXTRACTED",   # UPDATE ... SET wins over INFERRED MODIFY ... FROM wa
+        (save, "ztest_log_m"): "EXTRACTED",   # MODIFY ... FROM TABLE
+        (save, "ztest_log_r"): "EXTRACTED",
+        (save, "ztest_log_e"): "EXTRACTED",
+        (save, "ztest_log_x"): "EXTRACTED",
+        (clean, "ztest_log_x"): "EXTRACTED",
+        (clean, "ztest_log_r"): "EXTRACTED",
+        (clean, "ztest_log_t"): "INFERRED",   # DELETE t FROM wa: ambiguous
+        (save, "ztest_log_cl"): "EXTRACTED",  # CLIENT SPECIFIED FROM TABLE
+        (save, "ztest_log_cm"): "INFERRED",   # CLIENT SPECIFIED FROM wa
+        (clean, "ztest_log_c"): "EXTRACTED",  # chained
+        (clean, "ztest_log_d"): "EXTRACTED",
+    }
+    for (src, tbl), conf in expected.items():
+        e = edges.get((src, _t(tbl), "writes_to"))
+        assert e is not None, (src, tbl)
+        assert e["confidence"] == conf, (src, tbl)
+
+
+def test_sql_negatives_produce_no_edges():
+    result = extract_abap(OPEN_SQL)
+    neg = _m("negatives")
+    edges = [e for e in _sql_edges(result).values() if e["source"] == neg]
+    targets = {e["target"] for e in edges}
+    assert targets == {_t("ztest_log_h")}  # only the join with a real table
+    all_targets = {e["target"] for e in _sql_edges(result).values()}
+    for bad in ("zcomment_col1", "zcomment_quote", "zliteral", "ztemplate",
+                "lt_tab", "lt_data", "it_ret", "ls_decl", "lt_local", "mi_buffer",
+                "lv_dyn", "so_x", "tab_local", "table", "lt_ins"):
+        assert _t(bad) not in all_targets, bad
+
+
+def test_sql_form_and_toplevel_owners():
+    result = extract_abap(OPEN_SQL)
+    edges = _sql_edges(result)
+    form = _make_id(_file_stem(OPEN_SQL), "TOP_FORM")
+    assert (form, _t("ztest_form_tab"), "writes_to") in edges
+    file_nid = _make_id(str(OPEN_SQL))
+    top = edges[(file_nid, _t("ztest_toplevel"), "writes_to")]
+    assert top["confidence"] == "EXTRACTED"
+
+
+def test_sql_stub_contract_and_no_duplicates():
+    result = extract_abap(OPEN_SQL)
+    stub = next(n for n in result["nodes"] if n["id"] == _t("ztest_log_h"))
+    assert stub["file_type"] == "code"
+    assert stub["label"] == "ZTEST_LOG_H"
+    assert stub["source_location"] is None
+    assert stub["kind"] == "z_custom"
+    std = next(n for n in result["nodes"] if n["id"] == _t("lfa1"))
+    assert std["kind"] == "sap_standard"
+    keys = [(e["source"], e["target"], e["relation"]) for e in result["edges"]]
+    assert len(keys) == len(set(keys))
+    ids = [n["id"] for n in result["nodes"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_sql_line_numbers_and_validation():
+    from graphify.validate import validate_extraction
+    result = extract_abap(OPEN_SQL)
+    assert validate_extraction(result) == []
+    lines = OPEN_SQL.read_text(encoding="utf-8").splitlines()
+    e = _sql_edges(result)[(_m("save_log"), _t("ztest_log_m"), "writes_to")]
+    lineno = int(e["source_location"][1:])
+    assert "MODIFY ztest_log_m" in lines[lineno - 1]
+
+
+def test_sql_deterministic():
+    assert extract_abap(OPEN_SQL) == extract_abap(OPEN_SQL)
+
+
+def test_sql_edges_survive_build():
+    pytest.importorskip("networkx")
+    from graphify.build import build_from_json
+    G = build_from_json(extract_abap(OPEN_SQL))
+    assert G.has_node(_t("ztest_log_h"))
+    assert G.has_edge(_m("save_log"), _t("ztest_log_m"))

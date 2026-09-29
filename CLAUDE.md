@@ -102,28 +102,37 @@ estándar (tablas como TADIR, funciones como TR_TADIR_INTERFACE), pero **disting
 - Los nodos `sap_standard` se crean como nodos ligeros (solo nombre + kind) al emitir un edge hacia
   ellos; no requieren fichero `.abap`. Así el grafo puede filtrar "solo Z" o "todo" sin perder info.
 
-### Costura código→datos — DECISIÓN TOMADA: Opción A (detectar aquí, confirmar en reconciliación)
+### Costura código→datos — IMPLEMENTADA (Open SQL → stubs `ddic_tabl_*`)
 
-El repo 7 necesita edges código→datos (qué clase/report usa qué tabla/estructura/CDS). **Esos edges
-se emiten desde aquí**, con esta regla:
+`extract_abap` emite aristas desde el código hacia las tablas que lee/escribe con Open SQL:
 
-- `extract_abap` **detecta** referencias en el AST (target de `SELECT ... FROM <x>`, `TYPE <x>`,
-  etc.) y emite un edge `uses` hacia el **nombre** `<x>`, igual que ya hace con `calls` cross-file.
-- `extract_abap` **NO clasifica** si `<x>` es DDIC. No conoce el catálogo de tablas. Solo emite
-  "este código referencia el símbolo `<x>`" — eso es análisis de código puro, no conocimiento DDIC,
-  y por tanto sigue siendo upstreamable.
-- La **confirmación** ocurre por reconciliación: si el extractor DDIC (repo 7) crea el nodo `<x>`, el
-  edge se conecta solo; si nunca lo crea, el edge queda colgando o se poda. El filtrado del ruido lo
-  hace la existencia o no del nodo, no este extractor.
+- **Relaciones**: `selects_from` (SELECT/JOIN/subconsultas/`OPEN CURSOR`) y `writes_to`
+  (INSERT/UPDATE/MODIFY/DELETE). `selects_from` es la misma relación que usa `extract_ddic` (repo 7)
+  para vista→tabla, con el mismo sentido (quien lee → tabla); no colisionan porque los orígenes difieren.
+- **Origen**: método, FORM o módulo de función que envuelve la sentencia; en código de nivel superior,
+  el nodo fichero (igual que `calls`).
+- **Destino**: `ddic_tabl_<nombre_minúsculas>` (mismo formato que `extract_ddic._node_id`). Se crea un
+  **nodo stub** (`file_type=code`, `source_location=None`, `kind` z_custom/sap_standard, etiqueta en
+  mayúsculas): `build_from_json` descarta aristas cuyo destino no existe (sin nodos fantasma), así que
+  sin stub la arista se perdería. Al ejecutar `extract_ddic.py` (repo 7) sobre el mismo id solo se
+  actualizan `description`/`package`/`source_file`: el nodo conserva `file_type=code`.
+  **La condición previa original ("Graphify reconcilia por nombre con nodos de otro extractor") era
+  falsa**; la reconciliación se logra por id idéntico + stub.
+- **Confianza**: EXTRACTED salvo `MODIFY t FROM wa` y `DELETE t FROM wa` (INFERRED: ambiguos con tablas
+  internas; se descartan si `t` está declarado con `DATA` en el fichero o tiene prefijo local
+  `[lgmipcer]?_` (`lt_`, `gs_`, `mi_`, `it_`, `cs_`, `es_`, `rt_`...); no se recogen parámetros de método ni `TABLES`). `... FROM TABLE` es EXTRACTED: no existe para tablas internas.
+- **Método**: la gramática (repo 8) no tiene reglas de Open SQL, así que se escanea el **texto** por
+  sentencias (`_abap_sql_table_refs`), enmascarando comentarios y literales con los mismos offsets que
+  el árbol. No se toca la gramática.
+- `graphify extract` construye un grafo **no dirigido**: si un método lee y escribe la misma tabla, las
+  dos aristas se funden y prevalece `writes_to`. Tras cambiar el extractor, regenerar con `--force`
+  (caché AST).
 
-**Condición previa (verificar en Fase 0):** que Graphify reconcilie edges-por-nombre con nodos
-creados por OTRO extractor distinto (no solo dentro del mismo). Se infiere de cómo funcionan los
-`calls` cross-file, pero hay que confirmarlo leyendo el código. Si esa reconciliación cross-extractor
-no existiera, reabrir la decisión (alternativa: inferir los edges en el repo 7).
-
-**Orden:** NO implementar los `uses` código→datos en la integración inicial (Fase 4). Primero código
-puro (`calls`). Los `uses` hacia nombres DDIC se añaden cuando el repo 7 aborde su Fase 4, de forma
-coordinada.
+**Limitaciones**: SQL dinámico (`FROM (lv_tab)`, `SELECT (lv_fields)`) y `EXEC SQL` no se resuelven;
+las formas cortas obsoletas con `TABLES` (`MODIFY t.`, `DELETE t.`) quedan fuera; vistas DDIC y CDS
+(`zcds_*`) acaban como `ddic_tabl_<vista>` (no casan con `ddic_view_*`); macros con `&1` y
+`IMPORT/EXPORT ... FROM DATABASE` no se analizan; un `FROM` dentro de funciones SQL como
+`TRIM( BOTH x FROM col )` puede dar un falso positivo aislado.
 
 ## Cobertura legacy
 

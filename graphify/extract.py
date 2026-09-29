@@ -1,6 +1,7 @@
 """Deterministic structural extraction from source code using tree-sitter. Outputs nodes+edges dicts."""
 from __future__ import annotations
 
+import bisect
 import importlib
 import json
 import os
@@ -11397,13 +11398,153 @@ def extract_terraform(path: Path) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+_ABAP_MASK_RE = re.compile(
+    rb"(?m)^\*[^\n]*|\"[^\n]*|'(?:[^'\n]|'')*'|`(?:[^`\n]|``)*`|\|(?:[^|\\\n]|\\.)*\|"
+)
+_ABAP_SQL_START_RE = re.compile(r"\s*(select|insert|update|modify|delete|with|open)(?![\w-])", re.I)
+_ABAP_SQL_TOKEN_RE = re.compile(r"[^\s().,:]+|[().,:]")
+_ABAP_TABLE_NAME_RE = re.compile(r"^[A-Za-z/][A-Za-z0-9_/]*$")
+_ABAP_LOCAL_PREFIX_RE = re.compile(r"^[lgmipcer][a-z]_", re.I)
+_ABAP_INSERT_SKIP = {"INTO", "LINES", "INITIAL", "REPORT", "TEXTPOOL"}
+_ABAP_MODIFY_SKIP = {"SCREEN", "LINE", "CURRENT", "TABLE"}
+_ABAP_DELETE_SKIP = {"ADJACENT", "TABLE", "DATASET", "REPORT", "TEXTPOOL", "DYNPRO"}
+_ABAP_DELETE_FROM_SKIP = {"MEMORY", "DATABASE", "SHARED"}
+
+
+def _abap_statements(masked: str):
+    """Yield (token, offset) lists per ABAP statement; chained ``KW: a, b.`` is expanded."""
+    start = 0
+    for m in re.finditer(r"\.", masked):
+        text = masked[start:m.start()]
+        base = start
+        start = m.end()
+        if not _ABAP_SQL_START_RE.match(text):
+            continue
+        colon = text.find(":")
+        if colon != -1 and re.fullmatch(r"\s*\w+\s*", text[:colon]):
+            prefix = [(t.group(), base + t.start()) for t in _ABAP_SQL_TOKEN_RE.finditer(text[:colon])]
+            depth, part_start = 0, colon + 1
+            for i in range(colon + 1, len(text) + 1):
+                ch = text[i] if i < len(text) else ","
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                elif ch == "," and depth == 0:
+                    part = [(t.group(), base + part_start + t.start())
+                            for t in _ABAP_SQL_TOKEN_RE.finditer(text[part_start:i])]
+                    if part:
+                        yield prefix + part
+                    part_start = i + 1
+        else:
+            yield [(t.group(), base + t.start()) for t in _ABAP_SQL_TOKEN_RE.finditer(text)]
+
+
+def _abap_read_refs(toks: list, i0: int = 0):
+    """Yield (offset, name) for every table after FROM / JOIN in a SELECT token stream."""
+    n = len(toks)
+    for j in range(i0, n - 1):
+        word = toks[j][0].upper()
+        if word not in ("FROM", "JOIN"):
+            continue
+        k = j + 1
+        if toks[k][0] == "(":
+            depth, has_join = 0, False
+            for t, _ in toks[k:]:
+                if t == "(":
+                    depth += 1
+                elif t == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                elif t.upper() == "JOIN":
+                    has_join = True
+            if not has_join:
+                continue
+            while k < n and toks[k][0] == "(":
+                k += 1
+            if k >= n:
+                continue
+        name, off = toks[k]
+        if _ABAP_TABLE_NAME_RE.match(name):
+            yield off, name
+
+
+def _abap_sql_table_refs(source: bytes, declared: set[str] | frozenset = frozenset()) -> list[tuple]:
+    """Find Open SQL table references in ABAP source text.
+
+    The tree-sitter-abap grammar has no Open SQL rules, so statements are scanned
+    on the text (comments and literals masked, same byte offsets as the parse tree).
+    Returns (offset, table_name_upper, relation, confidence) with relation in
+    {selects_from, writes_to}. INFERRED only for MODIFY/DELETE <t> FROM <wa>, which
+    are ambiguous with internal tables; those are dropped if <t> looks local/declared.
+    """
+    masked = _ABAP_MASK_RE.sub(lambda m: b" " * (m.end() - m.start()), source).decode("latin-1")
+    refs: list[tuple] = []
+
+    def _local(name: str) -> bool:
+        return name.upper() in declared or bool(_ABAP_LOCAL_PREFIX_RE.match(name))
+
+    for toks in _abap_statements(masked):
+        u = [t[0].upper() for t in toks]
+        n = len(toks)
+        kw = u[0]
+        sel = next((i for i, w in enumerate(u) if w == "SELECT"), None)
+        if kw in ("SELECT", "WITH"):
+            for off, name in _abap_read_refs(toks):
+                refs.append((off, name, "selects_from", "EXTRACTED"))
+            continue
+        if kw == "OPEN":
+            if sel is not None:
+                for off, name in _abap_read_refs(toks, sel):
+                    refs.append((off, name, "selects_from", "EXTRACTED"))
+            continue
+        if n < 3:
+            continue
+        name, off = toks[1] if kw != "INSERT" or u[1] != "INTO" else toks[2]
+        conf = "EXTRACTED"
+        table = False
+        # FROM may follow CLIENT SPECIFIED / CONNECTION <con>
+        fi = 2 if u[2] == "FROM" else (u.index("FROM") if u[2] in ("CLIENT", "CONNECTION") and "FROM" in u else -1)
+        from_table = fi != -1 and u[fi + 1:fi + 2] == ["TABLE"]
+        if kw == "UPDATE":
+            table = u[2] in ("SET", "FROM", "CLIENT", "CONNECTION")
+        elif kw == "INSERT":
+            if u[1] == "INTO":
+                table = "INDEX" not in u and u[2] != "TABLE"
+            else:
+                table = fi != -1 and u[1] not in _ABAP_INSERT_SKIP
+        elif kw == "MODIFY":
+            table = (fi != -1 and u[1] not in _ABAP_MODIFY_SKIP
+                     and not {"INDEX", "TRANSPORTING", "WHERE", "USING"} & set(u))
+            if table and not from_table:
+                conf = "INFERRED"
+        elif kw == "DELETE":
+            if u[1] == "FROM":
+                name, off = toks[2]
+                table = name.upper() not in _ABAP_DELETE_FROM_SKIP
+            else:
+                table = (fi != -1 and u[1] not in _ABAP_DELETE_SKIP
+                         and "INDEX" not in u and (from_table or "TO" not in u))
+                if table and not from_table:
+                    conf = "INFERRED"
+        if table and _ABAP_TABLE_NAME_RE.match(name) and not (conf == "INFERRED" and _local(name)):
+            refs.append((off, name, "writes_to", conf))
+        if sel is not None:
+            for roff, rname in _abap_read_refs(toks, sel):
+                refs.append((roff, rname, "selects_from", "EXTRACTED"))
+    return refs
+
+
 def extract_abap(path: Path) -> dict:
     """Extract classes, methods, FMs, FORMs, interfaces, and calls from a .abap file.
 
     Nodes: CLASS DEFINITION/IMPLEMENTATION, METHOD, INTERFACE, FUNCTION GROUP,
            FUNCTION (module), FORM, REPORT.
     Edges: contains (file→scope→child) and calls (CALL FUNCTION EXTRACTED,
-           PERFORM and static ZCL=>method INFERRED, SUBMIT EXTRACTED).
+           PERFORM and static ZCL=>method INFERRED, SUBMIT EXTRACTED),
+           selects_from / writes_to (Open SQL, scope -> ddic_tabl_<table> stub;
+           see _abap_sql_table_refs).
     IDs are deterministic: derived from object names, not byte offsets.
     """
     try:
@@ -11495,12 +11636,16 @@ def extract_abap(path: Path) -> dict:
     # Uses data_spec field "name" (variable) and "typing" (reference_type) — verified against
     # the tree-sitter-abap grammar.
     var_type: dict[str, str] = {}
+    declared_vars: set[str] = set()
+    scopes: list[tuple[int, int, str]] = []  # (start_byte, end_byte, nid) for Open SQL owner lookup
     _prepass_stack = [root]
     while _prepass_stack:
         _pnode = _prepass_stack.pop()
         if _pnode.type == "data_spec":
             _vname_node = _pnode.child_by_field_name("name")
             _typing_node = _pnode.child_by_field_name("typing")
+            if _vname_node:
+                declared_vars.add(_text(_vname_node).upper())
             if _vname_node and _typing_node and _typing_node.type == "reference_type":
                 _var = _text(_vname_node).upper()
                 for _rt_child in _typing_node.children:
@@ -11551,6 +11696,7 @@ def extract_abap(path: Path) -> dict:
                 nid = _make_id("abap_method", cls_name, raw)
                 _ensure(nid, f"{cls_name}->{raw}", line, _kind(cls_name))
                 _contains_edge(owner, nid)
+                scopes.append((node.start_byte, node.end_byte, nid))
                 for child in reversed(node.children):
                     stack.append((child, nid, cls_name))
             continue
@@ -11571,6 +11717,7 @@ def extract_abap(path: Path) -> dict:
                 nid = _make_id("abap_fn", name)
                 _ensure(nid, f"FUNCTION {name}", line, _kind(name))
                 _contains_edge(file_nid, nid)
+                scopes.append((node.start_byte, node.end_byte, nid))
                 for child in reversed(node.children):
                     stack.append((child, nid, name))
             continue
@@ -11589,6 +11736,7 @@ def extract_abap(path: Path) -> dict:
                 nid = _make_id(stem, name)
                 _ensure(nid, f"FORM {name}", line, _kind(name))
                 _contains_edge(file_nid, nid)
+                scopes.append((node.start_byte, node.end_byte, nid))
                 for child in reversed(node.children):
                     stack.append((child, nid, cls_name))
             continue
@@ -11801,6 +11949,28 @@ def extract_abap(path: Path) -> dict:
         # Default: push children with inherited context
         for child in reversed(node.children):
             stack.append((child, owner, cls_name))
+
+    # Open SQL: the grammar has no rules for it, so scan the text and attribute each
+    # statement to its enclosing method/FORM/FM (file node at top level).
+    scopes.sort()
+    scope_starts = [sc[0] for sc in scopes]
+    newlines = [m.start() for m in re.finditer(rb"\n", source)]
+    sql_edges: dict[tuple[str, str, str], dict] = {}
+    for off, tname, relation, confidence in _abap_sql_table_refs(source, declared_vars):
+        idx = bisect.bisect_right(scope_starts, off) - 1
+        src = scopes[idx][2] if idx >= 0 and off < scopes[idx][1] else file_nid
+        tgt = "ddic_tabl_" + tname.lower()
+        _ensure_stub(tgt, tname.upper(), _kind(tname.upper()))
+        key = (src, tgt, relation)
+        existing = sql_edges.get(key)
+        if existing is None:
+            edge = {"source": src, "target": tgt, "relation": relation,
+                    "confidence": confidence, "source_file": str_path,
+                    "source_location": f"L{bisect.bisect_left(newlines, off) + 1}"}
+            sql_edges[key] = edge
+            edges.append(edge)
+        elif confidence == "EXTRACTED":
+            existing["confidence"] = "EXTRACTED"
 
     return {"nodes": nodes, "edges": edges}
 
