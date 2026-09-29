@@ -125,8 +125,10 @@ estándar (tablas como TADIR, funciones como TR_TADIR_INTERFACE), pero **disting
   sentencias (`_abap_sql_table_refs`), enmascarando comentarios y literales con los mismos offsets que
   el árbol. No se toca la gramática.
 - `graphify extract` construye un grafo **no dirigido**: si un método lee y escribe la misma tabla, las
-  dos aristas se funden y prevalece `writes_to`. Tras cambiar el extractor, regenerar con `--force`
-  (caché AST).
+  dos aristas se funden y prevalece `writes_to`. Tras cambiar el extractor hay que
+  invalidar la caché: `graphify extract` no tiene `--force`; borrar `<out>/graphify-out/cache/ast`,
+  `cache/stat-index.json` y `manifest.json` (este último evita el modo incremental), y después
+  ejecutar `extract_ddic.py --full-rebuild` en el repo 7.
 
 **Limitaciones**: SQL dinámico (`FROM (lv_tab)`, `SELECT (lv_fields)`) y `EXEC SQL` no se resuelven;
 las formas cortas obsoletas con `TABLES` (`MODIFY t.`, `DELETE t.`) quedan fuera; vistas DDIC y CDS
@@ -153,7 +155,7 @@ Windows/PowerShell: `graphify .` (sin barra), `graphify install --platform windo
 ## Definición de "hecho" (Goal-Driven Execution)
 
 - `uv run pytest tests/ -q -k abap` pasa.
-- `graphify extract <carpeta-con-.abap> --force` da nodos modernos **y** legacy con edges `calls`
+- `graphify extract <carpeta-con-.abap>` (sin caché/manifest previos) da nodos modernos **y** legacy con edges `calls`
   moderno→legacy.
 - Nada del pipeline modificado fuera de la regla 2.
 - `id` deterministas (regla 6): re-extraer no duplica nodos.
