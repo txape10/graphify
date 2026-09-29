@@ -99,6 +99,7 @@ Empezar por nodos + `calls`.
 estándar (tablas como TADIR, funciones como TR_TADIR_INTERFACE), pero **distinguidos** de los objetos Z.
 - La marca va en el **nodo**, no en el edge. Atributo `"kind"`: `"z_custom"` (tuyo) vs `"sap_standard"`.
 - Regla de derivación por nombre: empieza por `Z` o `Y` → `z_custom`; resto → `sap_standard`.
+  Excepción: los **FORM** (locales a su programa) toman el kind del fichero que los contiene (nombre hasta el primer `.`), no del nombre de la rutina.
 - Los nodos `sap_standard` se crean como nodos ligeros (solo nombre + kind) al emitir un edge hacia
   ellos; no requieren fichero `.abap`. Así el grafo puede filtrar "solo Z" o "todo" sin perder info.
 

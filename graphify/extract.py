@@ -11584,6 +11584,9 @@ def extract_abap(path: Path) -> dict:
     def _kind(name: str) -> str:
         return "z_custom" if name and name[0] in ("Z", "Y") else "sap_standard"
 
+    # FORMs are local to their program/include: kind comes from the file, not the routine name.
+    form_kind = _kind(path.name.split(".", 1)[0].upper())
+
     def _ensure(nid: str, label: str, line: int, kind: str) -> None:
         if nid not in seen_ids:
             seen_ids.add(nid)
@@ -11734,7 +11737,7 @@ def extract_abap(path: Path) -> dict:
             name = _fname(node, "name")
             if name:
                 nid = _make_id(stem, name)
-                _ensure(nid, f"FORM {name}", line, _kind(name))
+                _ensure(nid, f"FORM {name}", line, form_kind)
                 _contains_edge(file_nid, nid)
                 scopes.append((node.start_byte, node.end_byte, nid))
                 for child in reversed(node.children):
@@ -11766,7 +11769,7 @@ def extract_abap(path: Path) -> dict:
                     raw = _text(name_node).upper()
                     if raw:
                         tgt = _make_id(stem, raw)
-                        _ensure(tgt, f"FORM {raw}", line, _kind(raw))
+                        _ensure(tgt, f"FORM {raw}", line, form_kind)
                         _call_edge(owner, tgt, "INFERRED", line)
 
         elif ntype == "submit_statement":

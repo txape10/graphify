@@ -101,7 +101,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 
 **Node attributes (ABAP-specific):**
 
-- `kind`: `"z_custom"` for objects starting with `Z` or `Y`; `"sap_standard"` for all others. Enables `--hide-dead` and graph filters to separate customer code from SAP dependencies. Events inside Z/Y classes inherit the class kind (event names don't follow the Z/Y convention).
+- `kind`: `"z_custom"` for objects starting with `Z` or `Y`; `"sap_standard"` for all others. Enables `--hide-dead` and graph filters to separate customer code from SAP dependencies. Events inside Z/Y classes inherit the class kind (event names don't follow the Z/Y convention). FORMs inherit the kind of the containing program/include file (file name up to the first `.`), not of the routine name.
 - `dead_candidate`: set by `build.mark_dead_candidates(G)` — see below.
 - `dev_tool`: set on `REPORT` nodes with no cross-file callers — utility programs run directly from SE38, not called from other code.
 - `tcode`, `pgmna`, `dypno`, `ttext`: set on transaction nodes from `.tran.xml` exports.

@@ -674,3 +674,37 @@ def test_sql_edges_survive_build():
     G = build_from_json(extract_abap(OPEN_SQL))
     assert G.has_node(_t("ztest_log_h"))
     assert G.has_edge(_m("save_log"), _t("ztest_log_m"))
+
+
+def _form_kinds(tmp_path, fname, src):
+    f = tmp_path / fname
+    f.write_text(src, encoding="utf-8")
+    return {n["label"]: n["kind"] for n in extract_abap(f)["nodes"] if n["label"].startswith("FORM ")}
+
+
+def test_form_kind_from_containing_file(tmp_path):
+    kinds = _form_kinds(tmp_path, "zdemo_prog_f01.prog.abap", "FORM save_data.\nENDFORM.\n")
+    assert kinds == {"FORM SAVE_DATA": "z_custom"}
+
+
+def test_form_perform_before_definition_single_node(tmp_path):
+    src = "PERFORM save_data.\nFORM save_data.\nENDFORM.\n"
+    f = tmp_path / "zdemo_prog_f01.prog.abap"
+    f.write_text(src, encoding="utf-8")
+    forms = [n for n in extract_abap(f)["nodes"] if n["label"] == "FORM SAVE_DATA"]
+    assert len(forms) == 1 and forms[0]["kind"] == "z_custom"
+
+
+def test_form_perform_undefined_in_z_file(tmp_path):
+    kinds = _form_kinds(tmp_path, "zdemo_prog.prog.abap", "PERFORM elsewhere.\n")
+    assert kinds == {"FORM ELSEWHERE": "z_custom"}
+
+
+def test_form_in_standard_include_stays_standard(tmp_path):
+    kinds = _form_kinds(tmp_path, "lstdf01.abap", "FORM z_helper.\nENDFORM.\n")
+    assert kinds == {"FORM Z_HELPER": "sap_standard"}
+
+
+def test_form_kind_function_group_include(tmp_path):
+    kinds = _form_kinds(tmp_path, "zdemo.fugr.lzdemof01.abap", "FORM do_it.\nENDFORM.\n")
+    assert kinds == {"FORM DO_IT": "z_custom"}
