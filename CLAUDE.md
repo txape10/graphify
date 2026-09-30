@@ -68,7 +68,7 @@ tarea menciona DDIC/tablas/CDS, no corresponde aquí (salvo la costura código�
    con el plan antes de tocar. Si no coincide, para y dilo.
 2. **Toca lo mínimo del upstream** (Surgical Changes): modificar de *graphify* solo `extract.py`
    (función + dispatch), `collect_files()`, `CODE_EXTENSIONS` (`detect.py`), `_WATCHED_EXTENSIONS`
-   (`watch.py`), `pyproject.toml`, y `tests/`. No refactorizar el pipeline. Scripts propios (p. ej.
+   (`watch.py`), `pyproject.toml`, `tests/`, y por excepción aprobada `dedup.py` (`_is_exact_identity`). No refactorizar el pipeline. Scripts propios (p. ej.
    `probe_abap.py`) son código nuevo, viven aparte.
 3. **Respeta el esquema de `validate.py`** (no inventar otro):
    ```json
@@ -115,8 +115,13 @@ estándar (tablas como TADIR, funciones como TR_TADIR_INTERFACE), pero **disting
 - **Destino**: `ddic_tabl_<nombre_minúsculas>` (mismo formato que `extract_ddic._node_id`). Se crea un
   **nodo stub** (`file_type=code`, `source_location=None`, `kind` z_custom/sap_standard, etiqueta en
   mayúsculas): `build_from_json` descarta aristas cuyo destino no existe (sin nodos fantasma), así que
-  sin stub la arista se perdería. Al ejecutar `extract_ddic.py` (repo 7) sobre el mismo id solo se
-  actualizan `description`/`package`/`source_file`: el nodo conserva `file_type=code`.
+  sin stub la arista se perdería. Al ejecutar `extract_ddic.py` (repo 7) sobre el mismo id el stub se
+  **promueve** a nodo DDIC (`file_type=ddic`, `_origin=ddic_extractor`, `_promoted_from_stub=True`).
+  Por eso `dedup.py::_is_exact_identity` excluye de la fusión por similitud de etiqueta los nodos
+  `file_type=ddic`, `_origin=ddic_extractor` o con id `ddic_*`: sin ello, un `graphify extract`
+  **incremental** (`build_merge` carga el `graph.json` con los DDIC ya inyectados) fundía tablas
+  hermanas (`ZTSU_EXPED_LOG_H/_M/_R...`) y redirigía las aristas a la tabla equivocada. Con versiones
+  anteriores a este fix no ejecutar `extract` incremental sobre un grafo con nodos DDIC.
   **La condición previa original ("Graphify reconcilia por nombre con nodos de otro extractor") era
   falsa**; la reconciliación se logra por id idéntico + stub.
 - **Confianza**: EXTRACTED salvo `MODIFY t FROM wa` y `DELETE t FROM wa` (INFERRED: ambiguos con tablas

@@ -140,6 +140,22 @@ def _is_code(node: dict) -> bool:
     return node.get("file_type") == "code"
 
 
+def _is_exact_identity(node: dict) -> bool:
+    """Nodes whose identity is the ID, never the label: AST code symbols and DDIC
+    objects injected by an external extractor (``ddic_tabl_*``, ``ddic_ttyp_*``...).
+
+    Sibling DDIC names (``ZTSU_EXPED_LOG_H`` / ``_M``, or a table vs. its table type)
+    are distinct objects however similar their labels. The id prefix is checked too
+    because the external extractor can leave a DDIC node with another ``file_type``.
+    """
+    return (
+        _is_code(node)
+        or node.get("file_type") == "ddic"
+        or node.get("_origin") == "ddic_extractor"
+        or str(node.get("id", "")).startswith("ddic_")
+    )
+
+
 # ── main entry point ──────────────────────────────────────────────────────────
 
 def deduplicate_entities(
@@ -189,7 +205,8 @@ def deduplicate_entities(
     for node in unique_nodes:
         # Code symbols are keyed by ID, never by label — skip them entirely so
         # distinct same-named symbols are never merged by string similarity (#1205).
-        if _is_code(node):
+        # DDIC objects are keyed by ID too (see _is_exact_identity).
+        if _is_exact_identity(node):
             continue
         key = _norm(node.get("label", node.get("id", "")))
         if key:
@@ -225,7 +242,8 @@ def deduplicate_entities(
         # similar long names in different files (parallel backends, sibling
         # classes) must not be fuzzy-merged, and a code↔concept fuzzy match must
         # not transitively union two distinct code symbols via a concept (#1205).
-        if _is_code(node):
+        # Same for DDIC objects (see _is_exact_identity).
+        if _is_exact_identity(node):
             continue
         key = _norm(node.get("label", node.get("id", "")))
         if key and key not in seen_norms:

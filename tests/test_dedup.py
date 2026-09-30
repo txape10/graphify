@@ -268,3 +268,87 @@ def test_prefix_guard_fires_for_extension_pairs():
         assert hi.startswith(lo) and hi != lo, (
             f"Prefix guard should fire for ({a!r}, {b!r}) but did not"
         )
+
+
+# ── ABAP/DDIC identity nodes ─────────────────────────────────────────────────
+
+def _ddic(nid, label, source_file=""):
+    return {"id": nid, "label": label, "file_type": "ddic",
+            "_origin": "ddic_extractor", "source_file": source_file}
+
+
+def _method(nid, label):
+    return {"id": nid, "label": label, "file_type": "code", "source_file": "zcl_x.clas.abap"}
+
+
+_LOG_SUFFIXES = ("h", "m", "r", "t", "x")
+
+
+def _log_table_graph(source_file=""):
+    nodes, edges = [], []
+    for s in _LOG_SUFFIXES:
+        nodes.append(_ddic(f"ddic_tabl_ztsu_exped_log_{s}", f"ZTSU_EXPED_LOG_{s.upper()}", source_file))
+        nodes.append(_method(f"m_{s}", f"ZCL_X->SAVE_BBDD_LOG_{s.upper()}"))
+        edges.append({"source": f"m_{s}", "target": f"ddic_tabl_ztsu_exped_log_{s}",
+                      "relation": "writes_to", "confidence": "EXTRACTED"})
+    return nodes, edges
+
+
+@pytest.mark.parametrize("source_file", ["", "ddic/ztsu_exped_log.tabl.xml"])
+def test_ddic_tables_with_similar_names_not_merged(source_file):
+    nodes, edges = _log_table_graph(source_file)
+    out_nodes, out_edges = deduplicate_entities(nodes, edges, communities={})
+    ids = {n["id"] for n in out_nodes}
+    assert {f"ddic_tabl_ztsu_exped_log_{s}" for s in _LOG_SUFFIXES} <= ids
+    assert {(e["source"], e["target"]) for e in out_edges} == {
+        (f"m_{s}", f"ddic_tabl_ztsu_exped_log_{s}") for s in _LOG_SUFFIXES}
+
+
+def test_ddic_tables_survive_build():
+    pytest.importorskip("networkx")
+    from graphify.build import build
+    nodes, edges = _log_table_graph()
+    G = build([{"nodes": nodes, "edges": edges}])
+    assert G.has_edge("m_m", "ddic_tabl_ztsu_exped_log_m")
+    assert not G.has_edge("m_m", "ddic_tabl_ztsu_exped_log_h")
+
+
+def test_ddic_table_and_table_type_not_merged():
+    nodes = [_ddic("ddic_tabl_ztsu_partidas", "ZTSU_PARTIDAS"),
+             _ddic("ddic_ttyp_ztsupartida", "ZTSUPARTIDA"),
+             _method("m_p", "ZCL_X->PROCESS_ESTADO_TRANSITO_PARTIDAS")]
+    edges = [{"source": "m_p", "target": "ddic_tabl_ztsu_partidas", "relation": "selects_from"}]
+    out_nodes, out_edges = deduplicate_entities(nodes, edges, communities={})
+    assert {"ddic_tabl_ztsu_partidas", "ddic_ttyp_ztsupartida"} <= {n["id"] for n in out_nodes}
+    assert out_edges[0]["target"] == "ddic_tabl_ztsu_partidas"
+
+
+def test_build_merge_keeps_ddic_nodes_from_existing_graph(tmp_path):
+    """Incremental extract: the existing graph.json (with injected DDIC nodes) is merged first."""
+    pytest.importorskip("networkx")
+    import json
+    from graphify.build import build_merge
+    nodes, edges = _log_table_graph()
+    gp = tmp_path / "graph.json"
+    gp.write_text(json.dumps({"nodes": nodes, "edges": edges}), encoding="utf-8")
+    stubs = [{"id": f"ddic_tabl_ztsu_exped_log_{s}", "label": f"ZTSU_EXPED_LOG_{s.upper()}",
+              "file_type": "code", "source_file": "", "source_location": None} for s in _LOG_SUFFIXES]
+    G = build_merge([{"nodes": stubs, "edges": edges}], graph_path=gp)
+    for s in _LOG_SUFFIXES:
+        assert G.has_edge(f"m_{s}", f"ddic_tabl_ztsu_exped_log_{s}")
+    assert not G.has_edge("m_m", "ddic_tabl_ztsu_exped_log_h")
+
+
+def test_ddic_prefix_protects_node_with_wrong_file_type():
+    """extract_ddic repairs DDIC nodes whose file_type was altered; the id prefix still protects them."""
+    nodes = [{"id": "ddic_tabl_ztsu_exped_log_h", "label": "ZTSU_EXPED_LOG_H", "file_type": "document"},
+             {"id": "ddic_tabl_ztsu_exped_log_m", "label": "ZTSU_EXPED_LOG_M"}]
+    out_nodes, _ = deduplicate_entities(nodes, [], communities={})
+    assert len(out_nodes) == 2
+
+
+def test_non_ddic_semantic_nodes_still_merge():
+    nodes = [{"id": "a", "label": "GraphExtractor", "file_type": "concept", "source_file": "notes.md"},
+             {"id": "b", "label": "Graph Extractor", "file_type": "concept", "source_file": "notes.md"}]
+    out_nodes, _ = deduplicate_entities(nodes, [], communities={})
+    assert len(out_nodes) == 1
