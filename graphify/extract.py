@@ -7089,6 +7089,10 @@ def _rewire_unique_stub_nodes(nodes: list[dict], edges: list[dict]) -> None:
         stub_id = str(stub.get("id", ""))
         if not stub_id:
             continue
+        # DDIC identity is the id (see dedup._is_exact_identity): a table stub must never
+        # fold into a same-named transaction (SM30 pattern: tcode == table name).
+        if stub_id.startswith("ddic_"):
+            continue
         candidates = real_by_label.get(_node_label_key(stub), [])
         if len(candidates) != 1:
             continue
@@ -11411,14 +11415,14 @@ _ABAP_DELETE_SKIP = {"ADJACENT", "TABLE", "DATASET", "REPORT", "TEXTPOOL", "DYNP
 _ABAP_DELETE_FROM_SKIP = {"MEMORY", "DATABASE", "SHARED"}
 
 
-def _abap_statements(masked: str):
+def _abap_statements(masked: str, start_re: re.Pattern = _ABAP_SQL_START_RE):
     """Yield (token, offset) lists per ABAP statement; chained ``KW: a, b.`` is expanded."""
     start = 0
     for m in re.finditer(r"\.", masked):
         text = masked[start:m.start()]
         base = start
         start = m.end()
-        if not _ABAP_SQL_START_RE.match(text):
+        if not start_re.match(text):
             continue
         colon = text.find(":")
         if colon != -1 and re.fullmatch(r"\s*\w+\s*", text[:colon]):
@@ -11536,6 +11540,47 @@ def _abap_sql_table_refs(source: bytes, declared: set[str] | frozenset = frozens
     return refs
 
 
+_ABAP_INCLUDE_START_RE = re.compile(r"\s*include(?![\w-])", re.I)
+_ABAP_INCLUDE_NAME_RE = re.compile(r"^[\w/#<>]+$")
+_ABAP_PROGRAM_HEAD_RE = re.compile(r"(?im)^\s*(?:report|program|function-pool)\s+[\w/#<>]")
+_ABAP_FUGR_INCLUDE_RE = re.compile(r"(?i)^l(?:[zy]|[#/])")
+
+
+def _abap_include_refs(source: bytes) -> list[tuple[int, str]]:
+    """Find ``INCLUDE <name>.`` statements: (offset of the name, NAME_UPPER).
+
+    Done on the text (comments/literals masked) because the grammar does not parse the
+    chained form ``INCLUDE: a, b.``. ``INCLUDE STRUCTURE|TYPE`` (DDIC/structure includes)
+    are not program includes and are skipped.
+    """
+    masked = _ABAP_MASK_RE.sub(lambda m: b" " * (m.end() - m.start()), source).decode("latin-1")
+    refs: list[tuple[int, str]] = []
+    for toks in _abap_statements(masked, _ABAP_INCLUDE_START_RE):
+        if len(toks) < 2 or toks[0][0].upper() != "INCLUDE":
+            continue
+        name, off = toks[1]
+        if name.upper() in ("STRUCTURE", "TYPE") or not _ABAP_INCLUDE_NAME_RE.match(name):
+            continue
+        refs.append((off, name.upper()))
+    return refs
+
+
+def _abap_include_name(path: Path, source: bytes) -> str | None:
+    """Name of the include a file defines, or None if it is a main program / not an include.
+
+    ``<name>.prog.abap`` without REPORT/PROGRAM/FUNCTION-POOL, or the ``L<fg>...`` includes
+    of a function group (``<fg>.fugr.l<fg>top.abap``). Screens and function modules are not includes.
+    """
+    parts = path.name.split(".")
+    if len(parts) == 3 and parts[1].lower() == "prog" and parts[2].lower() == "abap":
+        masked = _ABAP_MASK_RE.sub(lambda m: b" " * (m.end() - m.start()), source).decode("latin-1")
+        return None if _ABAP_PROGRAM_HEAD_RE.search(masked) else parts[0].upper()
+    if (len(parts) == 4 and parts[1].lower() == "fugr" and parts[3].lower() == "abap"
+            and _ABAP_FUGR_INCLUDE_RE.match(parts[2])):
+        return parts[2].upper()
+    return None
+
+
 def extract_abap(path: Path) -> dict:
     """Extract classes, methods, FMs, FORMs, interfaces, and calls from a .abap file.
 
@@ -11544,7 +11589,8 @@ def extract_abap(path: Path) -> dict:
     Edges: contains (file→scope→child) and calls (CALL FUNCTION EXTRACTED,
            PERFORM and static ZCL=>method INFERRED, SUBMIT EXTRACTED),
            selects_from / writes_to (Open SQL, scope -> ddic_tabl_<table> stub;
-           see _abap_sql_table_refs).
+           see _abap_sql_table_refs), includes (INCLUDE <name>. -> abap_incl_<name>;
+           an include file also defines that node, see _abap_include_refs).
     IDs are deterministic: derived from object names, not byte offsets.
     """
     try:
@@ -11583,6 +11629,14 @@ def extract_abap(path: Path) -> dict:
 
     def _kind(name: str) -> str:
         return "z_custom" if name and name[0] in ("Z", "Y") else "sap_standard"
+
+    def _include_kind(name: str) -> str:
+        # function-group / module-pool includes are named L<fg>.. / SAPL<fg> / M<prog>..:
+        # the Z/Y comes after the prefix
+        for prefix in ("SAPL", "SAPM", "L", "M"):
+            if name.startswith(prefix) and name[len(prefix):len(prefix) + 1] in ("Z", "Y"):
+                return "z_custom"
+        return _kind(name)
 
     # FORMs are local to their program/include: kind comes from the file, not the routine name.
     form_kind = _kind(path.name.split(".", 1)[0].upper())
@@ -11641,6 +11695,7 @@ def extract_abap(path: Path) -> dict:
     var_type: dict[str, str] = {}
     declared_vars: set[str] = set()
     scopes: list[tuple[int, int, str]] = []  # (start_byte, end_byte, nid) for Open SQL owner lookup
+    top_nid = ""  # REPORT / FUNCTION GROUP node that owns top-level statements (INCLUDE edges)
     _prepass_stack = [root]
     while _prepass_stack:
         _pnode = _prepass_stack.pop()
@@ -11731,6 +11786,7 @@ def extract_abap(path: Path) -> dict:
                 nid = _make_id("abap_fg", name)
                 _ensure(nid, f"FUNCTION GROUP {name}", line, _kind(name))
                 _contains_edge(file_nid, nid)
+                top_nid = top_nid or nid
             continue
 
         if ntype == "form_definition":
@@ -11750,6 +11806,7 @@ def extract_abap(path: Path) -> dict:
                 nid = _make_id("abap_prog", name)
                 _ensure(nid, f"REPORT {name}", line, _kind(name))
                 _contains_edge(file_nid, nid)
+                top_nid = top_nid or nid
             continue
 
         elif ntype == "call_function_statement":
@@ -11974,6 +12031,28 @@ def extract_abap(path: Path) -> dict:
             edges.append(edge)
         elif confidence == "EXTRACTED":
             existing["confidence"] = "EXTRACTED"
+
+    # INCLUDE <name>.: an include file defines its own abap_incl_<name> node (the target of
+    # the includes edges from its parent). The target is NOT stubbed for Z includes: a stub
+    # (source_file "") would make _disambiguate_colliding_node_ids rename the real node.
+    incl_name = _abap_include_name(path, source)
+    if incl_name:
+        top_nid = _make_id("abap_incl", incl_name)
+        _ensure(top_nid, f"INCLUDE {incl_name}", 1, _include_kind(incl_name))
+        _contains_edge(file_nid, top_nid)
+    for off, iname in _abap_include_refs(source):
+        idx = bisect.bisect_right(scope_starts, off) - 1
+        src = scopes[idx][2] if idx >= 0 and off < scopes[idx][1] else (top_nid or file_nid)
+        tgt = _make_id("abap_incl", iname)
+        ikind = _include_kind(iname)
+        if ikind != "z_custom":
+            _ensure_stub(tgt, f"INCLUDE {iname}", ikind)
+        key = (src, tgt, "includes")
+        if src != tgt and key not in seen_edges:
+            seen_edges.add(key)
+            edges.append({"source": src, "target": tgt, "relation": "includes",
+                          "confidence": "EXTRACTED", "source_file": str_path,
+                          "source_location": f"L{bisect.bisect_left(newlines, off) + 1}"})
 
     return {"nodes": nodes, "edges": edges}
 

@@ -81,6 +81,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | `FUNCTION <name>` | `abap_fn_*` | `function_definition` AST node |
 | `REPORT <name>` | `abap_prog_*` | `report_statement` AST node |
 | `FORM <name>` | `<stem>_<name>` | `form_definition` AST node (file-scoped) |
+| `INCLUDE <name>` | `abap_incl_*` | include file (`<name>.prog.abap` without REPORT/PROGRAM, `<fg>.fugr.l<fg>*.abap`); also stub for standard includes |
 | `EVENT <name>` | `abap_event_*` | `events_declaration` / `class_events_declaration` |
 | `TRANSACTION <tcode>` | `abap_tran_*` | `extract_tran()` from `.tran.xml` |
 | `BADI-><method>` | `abap_badi_method_*` | `call_badi_statement` (runtime stub) |
@@ -96,6 +97,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | `uses` | `INFERRED` | `TYPE REF TO`, `NEW`, `CREATE OBJECT`, `GET BADI TYPE`, `SET HANDLER me->`, static `ZCL=>METHOD()` → class node, `RAISE EXCEPTION TYPE zcx_xxx` → exception class node |
 | `selects_from` | `EXTRACTED` | Open SQL read (`SELECT ... FROM`/`JOIN`) → `ddic_tabl_<table>` stub (text scan, not AST) |
 | `writes_to` | `EXTRACTED` / `INFERRED` | `INSERT`/`UPDATE`/`MODIFY`/`DELETE` on a DB table → `ddic_tabl_<table>` stub; INFERRED for `MODIFY/DELETE t FROM wa` (ambiguous with itabs) |
+| `includes` | `EXTRACTED` | `INCLUDE <name>.` (text scan) → `abap_incl_<name>`; origin = enclosing FORM/method/FM, else REPORT / function group / include node. Same relation name as DDIC→DDIC `INCLUDE STRUCTURE` edges (injected by `extract_ddic`); distinguishable by endpoints |
 | `raises` | `EXTRACTED` | `RAISE EVENT <name>` |
 | `launches` | `EXTRACTED` | `.tran.xml` TCODE → program (Z/Y only) |
 
@@ -114,6 +116,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 | `abap_intf_*` | Interfaces — same ID in definition and reference |
 | `abap_fn_*` | Function modules — same ID in FM definition and `CALL FUNCTION` stub |
 | `abap_fg_*` | Function groups |
+| `abap_incl_*` | Includes — global, `_make_id("abap_incl", name)`; no stub for Z includes |
 | `abap_prog_*` | Programs/reports — same ID in `.abap` source and `.tran.xml` stub |
 | `abap_event_*` | Events — same ID in declaration and `RAISE EVENT` stub |
 | `abap_tran_*` | Transactions (from `.tran.xml`) |

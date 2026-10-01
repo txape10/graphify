@@ -68,7 +68,7 @@ tarea menciona DDIC/tablas/CDS, no corresponde aquí (salvo la costura código�
    con el plan antes de tocar. Si no coincide, para y dilo.
 2. **Toca lo mínimo del upstream** (Surgical Changes): modificar de *graphify* solo `extract.py`
    (función + dispatch), `collect_files()`, `CODE_EXTENSIONS` (`detect.py`), `_WATCHED_EXTENSIONS`
-   (`watch.py`), `pyproject.toml`, `tests/`, y por excepción aprobada `dedup.py` (`_is_exact_identity`). No refactorizar el pipeline. Scripts propios (p. ej.
+   (`watch.py`), `pyproject.toml`, `tests/`, y por excepción aprobada `dedup.py` (`_is_exact_identity`) y `_rewire_unique_stub_nodes` (guardia `ddic_*`). No refactorizar el pipeline. Scripts propios (p. ej.
    `probe_abap.py`) son código nuevo, viven aparte.
 3. **Respeta el esquema de `validate.py`** (no inventar otro):
    ```json
@@ -127,6 +127,7 @@ estándar (tablas como TADIR, funciones como TR_TADIR_INTERFACE), pero **disting
 - **Confianza**: EXTRACTED salvo `MODIFY t FROM wa` y `DELETE t FROM wa` (INFERRED: ambiguos con tablas
   internas; se descartan si `t` está declarado con `DATA` en el fichero o tiene prefijo local
   `[lgmipcer]?_` (`lt_`, `gs_`, `mi_`, `it_`, `cs_`, `es_`, `rt_`...); no se recogen parámetros de método ni `TABLES`). `... FROM TABLE` es EXTRACTED: no existe para tablas internas.
+- **INCLUDE**: `INCLUDE x.` emite `includes` (EXTRACTED) hacia `abap_incl_<x>`; el fichero include define ese nodo (etiqueta `INCLUDE X`, no marcado dead). Origen: FORM/método/FM envolvente o, a nivel superior, REPORT / `abap_fg_*` / el propio include. Sin stub para includes Z (un stub con `source_file=""` haría que `_disambiguate_colliding_node_ids` renombrase el nodo real); stub `sap_standard` para los estándar. Si el include no está en el corpus la arista se descarta en el build. `_rewire_unique_stub_nodes` ignora stubs `ddic_*` (tabla y transacción homónimas, patrón SM30).
 - **Método**: la gramática (repo 8) no tiene reglas de Open SQL, así que se escanea el **texto** por
   sentencias (`_abap_sql_table_refs`), enmascarando comentarios y literales con los mismos offsets que
   el árbol. No se toca la gramática.

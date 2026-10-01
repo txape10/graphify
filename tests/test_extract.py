@@ -1215,3 +1215,18 @@ def test_dart_child_node_ids_are_stem_based(tmp_path):
         )
 
 
+
+
+def test_rewire_leaves_ddic_stub_alone_even_if_label_matches_real_node():
+    from graphify.extract import _rewire_unique_stub_nodes
+    nodes = [
+        {"id": "abap_tran_ztpp_x", "label": "ZTPP_X", "file_type": "code",
+         "source_file": "ztpp_x.tran.xml"},
+        {"id": "ddic_tabl_ztpp_x", "label": "ZTPP_X", "file_type": "code", "source_file": ""},
+        {"id": "abap_cls_zcl_a", "label": "CLASS ZCL_A DEFINITION", "file_type": "code",
+         "source_file": ""},
+    ]
+    edges = [{"source": "m", "target": "ddic_tabl_ztpp_x", "relation": "selects_from"}]
+    _rewire_unique_stub_nodes(nodes, edges)
+    assert edges[0]["target"] == "ddic_tabl_ztpp_x"
+    assert "ddic_tabl_ztpp_x" in {n["id"] for n in nodes}

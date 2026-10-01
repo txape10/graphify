@@ -546,3 +546,12 @@ class TestKnownAlive:
         ])
         mark_dead_candidates(G, corpus_root=tmp_path)
         assert not G.nodes["m1"].get("dead_candidate")
+
+
+def test_include_anchor_label_is_not_marked_dead():
+    import networkx as nx
+    G = nx.Graph()
+    G.add_node("abap_incl_zx", label="INCLUDE ZX", file_type="code", kind="z_custom",
+               source_file="zx.prog.abap", source_location="L1")
+    mark_dead_candidates(G)
+    assert not G.nodes["abap_incl_zx"].get("dead_candidate")

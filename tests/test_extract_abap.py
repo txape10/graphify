@@ -708,3 +708,143 @@ def test_form_in_standard_include_stays_standard(tmp_path):
 def test_form_kind_function_group_include(tmp_path):
     kinds = _form_kinds(tmp_path, "zdemo.fugr.lzdemof01.abap", "FORM do_it.\nENDFORM.\n")
     assert kinds == {"FORM DO_IT": "z_custom"}
+
+
+def test_sql_table_not_rewired_to_same_named_transaction(tmp_path):
+    from graphify.extract import extract
+    cls = tmp_path / "zcl_demo.clas.abap"
+    cls.write_text(
+        "CLASS zcl_demo DEFINITION PUBLIC.\n  PUBLIC SECTION.\n    METHODS run.\nENDCLASS.\n"
+        "CLASS zcl_demo IMPLEMENTATION.\n  METHOD run.\n"
+        "    SELECT SINGLE werks FROM ztpp_demo INTO @DATA(lv_werks).\n  ENDMETHOD.\nENDCLASS.\n",
+        encoding="utf-8")
+    tran = tmp_path / "ztpp_demo.tran.xml"
+    tran.write_text("<TSTC>\n  <TCODE>ZTPP_DEMO</TCODE>\n  <PGMNA>SAPMSVMA</PGMNA>\n</TSTC>\n",
+                    encoding="utf-8")
+    result = extract([cls, tran], cache_root=tmp_path)
+    ids = {n["id"] for n in result["nodes"]}
+    assert "abap_tran_ztpp_demo" in ids and "ddic_tabl_ztpp_demo" in ids
+    sql = [e for e in result["edges"] if e["relation"] in ("selects_from", "writes_to")]
+    assert [e["target"] for e in sql] == ["ddic_tabl_ztpp_demo"]
+
+
+def _write(tmp_path, fname, src):
+    f = tmp_path / fname
+    f.write_text(src, encoding="utf-8")
+    return f
+
+
+def _includes(result):
+    return {(e["source"], e["target"]) for e in result["edges"] if e["relation"] == "includes"}
+
+
+MAIN_WITH_INCLUDES = """REPORT zdemo.
+INCLUDE zdemo_top.
+INCLUDE zdemo_sel IF FOUND.
+INCLUDE zdemo_eve. " trailing comment
+INCLUDE: zdemo_i01, zdemo_o01.
+* INCLUDE zdemo_commented.
+INCLUDE <icon>.
+TYPES: BEGIN OF ty_s,
+         a TYPE i.
+  INCLUDE TYPE zty_other.
+  INCLUDE STRUCTURE zstr_other.
+TYPES END OF ty_s.
+FORM do_it.
+  INCLUDE zdemo_in_form.
+ENDFORM.
+"""
+
+
+def test_report_includes_generate_one_edge_each(tmp_path):
+    result = extract_abap(_write(tmp_path, "zdemo.prog.abap", MAIN_WITH_INCLUDES))
+    rep, form = "abap_prog_zdemo", _make_id(_file_stem(tmp_path / "zdemo.prog.abap"), "DO_IT")
+    assert _includes(result) == {
+        (rep, "abap_incl_zdemo_top"), (rep, "abap_incl_zdemo_sel"), (rep, "abap_incl_zdemo_eve"),
+        (rep, "abap_incl_zdemo_i01"), (rep, "abap_incl_zdemo_o01"), (rep, "abap_incl_icon"),
+        (form, "abap_incl_zdemo_in_form"),
+    }
+    assert all(e["confidence"] == "EXTRACTED" for e in result["edges"] if e["relation"] == "includes")
+
+
+def test_include_targets_kind_and_stubs(tmp_path):
+    result = extract_abap(_write(tmp_path, "zdemo.prog.abap", MAIN_WITH_INCLUDES))
+    ids = {n["id"]: n for n in result["nodes"]}
+    assert "abap_incl_zdemo_top" not in ids  # Z include: no stub (would trigger id disambiguation)
+    assert ids["abap_incl_icon"]["kind"] == "sap_standard"
+    assert ids["abap_incl_icon"]["label"] == "INCLUDE <ICON>"
+    assert ids["abap_incl_icon"]["source_file"] == ""
+
+
+def test_include_file_defines_anchor_and_chains(tmp_path):
+    f = _write(tmp_path, "zdemo_top.prog.abap", "INCLUDE zdemo_t00.\nDATA gv_x TYPE i.\n")
+    result = extract_abap(f)
+    anchor = next(n for n in result["nodes"] if n["id"] == "abap_incl_zdemo_top")
+    assert anchor["label"] == "INCLUDE ZDEMO_TOP" and anchor["kind"] == "z_custom"
+    assert _includes(result) == {("abap_incl_zdemo_top", "abap_incl_zdemo_t00")}
+
+
+def test_no_anchor_for_main_program_screen_or_program_statement(tmp_path):
+    for fname, src in [("zdemo.prog.abap", "REPORT zdemo.\n"),
+                       ("zdemo.prog.abap", "PROGRAM zdemo.\n"),
+                       ("zdemo.prog.screen_0100.abap", "PROCESS BEFORE OUTPUT.\n")]:
+        f = _write(tmp_path, fname, src)
+        assert not [n for n in extract_abap(f)["nodes"] if n["id"].startswith("abap_incl_")]
+
+
+def test_report_with_program_assignment_is_not_misread_as_header(tmp_path):
+    f = _write(tmp_path, "zdemo_f01.prog.abap", "lv_prog = sy-cprog.\nprogram = sy-cprog.\n")
+    assert [n["id"] for n in extract_abap(f)["nodes"] if n["id"].startswith("abap_incl_")] == \
+        ["abap_incl_zdemo_f01"]
+
+
+def test_function_group_includes(tmp_path):
+    top = _write(tmp_path, "zfg.fugr.lzfgtop.abap", "DATA gv_x TYPE i.\n")
+    anchor = next(n for n in extract_abap(top)["nodes"] if n["id"].startswith("abap_incl_"))
+    assert anchor["id"] == "abap_incl_lzfgtop" and anchor["kind"] == "z_custom"
+    sapl = _write(tmp_path, "zfg.fugr.saplzfg.abap",
+                  "FUNCTION-POOL zfg.\nINCLUDE lzfgtop.\nINCLUDE lzfguxx.\n")
+    result = extract_abap(sapl)
+    assert _includes(result) == {("abap_fg_zfg", "abap_incl_lzfgtop"), ("abap_fg_zfg", "abap_incl_lzfguxx")}
+    fm = _write(tmp_path, "zfg.fugr.zfg_fm.abap", "FUNCTION zfg_fm.\nENDFUNCTION.\n")
+    assert not [n for n in extract_abap(fm)["nodes"] if n["id"].startswith("abap_incl_")]
+
+
+def test_include_extraction_deterministic(tmp_path):
+    f = _write(tmp_path, "zdemo.prog.abap", MAIN_WITH_INCLUDES)
+    assert extract_abap(f) == extract_abap(f)
+
+
+def test_include_path_reaches_form_and_id_survives_transaction(tmp_path):
+    from graphify.extract import extract
+    from graphify.build import build_from_json
+    main = _write(tmp_path, "zdemo.prog.abap", "REPORT zdemo.\nINCLUDE zdemo_f01.\n")
+    inc = _write(tmp_path, "zdemo_f01.prog.abap", "FORM save_data.\nENDFORM.\n")
+    tran = _write(tmp_path, "zdemo.tran.xml", "<TSTC>\n  <TCODE>ZDEMO</TCODE>\n  <PGMNA>ZDEMO</PGMNA>\n</TSTC>\n")
+    G = build_from_json(extract([main, inc, tran], cache_root=tmp_path))
+    form = next(n for n, d in G.nodes(data=True) if d.get("label") == "FORM SAVE_DATA")
+    prog = next(n for n, d in G.nodes(data=True) if d.get("label") == "REPORT ZDEMO")
+    assert "abap_incl_zdemo_f01" in G  # anchor id not renamed
+    import networkx as nx
+    assert nx.shortest_path_length(G, prog, form) == 3
+
+
+def test_include_kind_module_pool_and_lowercase_keyword(tmp_path):
+    result = extract_abap(_write(tmp_path, "zdemo.prog.abap",
+                                 "REPORT zdemo.\ninclude mzdemotop.\ninclude: lzdemoo01, mv45afzz.\n"))
+    ids = {n["id"]: n for n in result["nodes"]}
+    assert _includes(result) == {("abap_prog_zdemo", "abap_incl_mzdemotop"),
+                                 ("abap_prog_zdemo", "abap_incl_lzdemoo01"),
+                                 ("abap_prog_zdemo", "abap_incl_mv45afzz")}
+    assert "abap_incl_mzdemotop" not in ids and "abap_incl_lzdemoo01" not in ids  # Z: no stub
+    assert ids["abap_incl_mv45afzz"]["kind"] == "sap_standard"
+
+
+def test_include_inside_method_and_chained_in_form(tmp_path):
+    src = ("CLASS zcl_a DEFINITION PUBLIC.\n  PUBLIC SECTION.\n    METHODS run.\nENDCLASS.\n"
+           "CLASS zcl_a IMPLEMENTATION.\n  METHOD run.\n    INCLUDE zinc_in_method.\n  ENDMETHOD.\nENDCLASS.\n"
+           "FORM f.\n  INCLUDE: zinc_a, zinc_b.\nENDFORM.\n")
+    result = extract_abap(_write(tmp_path, "zcl_a.clas.abap", src))
+    form = _make_id(_file_stem(tmp_path / "zcl_a.clas.abap"), "F")
+    assert _includes(result) == {("abap_method_zcl_a_run", "abap_incl_zinc_in_method"),
+                                 (form, "abap_incl_zinc_a"), (form, "abap_incl_zinc_b")}
