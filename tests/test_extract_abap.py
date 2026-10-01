@@ -815,7 +815,7 @@ def test_include_extraction_deterministic(tmp_path):
     assert extract_abap(f) == extract_abap(f)
 
 
-def test_include_path_reaches_form_and_id_survives_transaction(tmp_path):
+def test_include_path_reaches_form_in_two_hops_and_id_survives_transaction(tmp_path):
     from graphify.extract import extract
     from graphify.build import build_from_json
     main = _write(tmp_path, "zdemo.prog.abap", "REPORT zdemo.\nINCLUDE zdemo_f01.\n")
@@ -826,7 +826,7 @@ def test_include_path_reaches_form_and_id_survives_transaction(tmp_path):
     prog = next(n for n, d in G.nodes(data=True) if d.get("label") == "REPORT ZDEMO")
     assert "abap_incl_zdemo_f01" in G  # anchor id not renamed
     import networkx as nx
-    assert nx.shortest_path_length(G, prog, form) == 3
+    assert nx.shortest_path_length(G, prog, form) == 2
 
 
 def test_include_kind_module_pool_and_lowercase_keyword(tmp_path):
@@ -848,3 +848,68 @@ def test_include_inside_method_and_chained_in_form(tmp_path):
     form = _make_id(_file_stem(tmp_path / "zcl_a.clas.abap"), "F")
     assert _includes(result) == {("abap_method_zcl_a_run", "abap_incl_zinc_in_method"),
                                  (form, "abap_incl_zinc_a"), (form, "abap_incl_zinc_b")}
+
+
+def _contains(result, src=None):
+    return {(e["source"], e["target"]) for e in result["edges"]
+            if e["relation"] == "contains" and (src is None or e["source"] == src)}
+
+
+LOCAL_CLASS = (
+    "CLASS lcl_h DEFINITION.\n  PUBLIC SECTION.\n    METHODS run.\nENDCLASS.\n"
+    "CLASS lcl_h IMPLEMENTATION.\n  METHOD run.\n  ENDMETHOD.\nENDCLASS.\n"
+)
+LOCAL_CLASS_INCLUDE = "FORM do_a.\nENDFORM.\nFORM do_b.\nENDFORM.\n" + LOCAL_CLASS
+
+
+def test_include_anchor_contains_top_level_definitions_and_keeps_file_edges(tmp_path):
+    f = _write(tmp_path, "zdemo_f01.prog.abap", LOCAL_CLASS_INCLUDE)
+    result = extract_abap(f)
+    file_nid = next(n["id"] for n in result["nodes"] if n["label"] == "zdemo_f01.prog.abap")
+    stem = _file_stem(f)
+    children = {_make_id(stem, "DO_A"), _make_id(stem, "DO_B"), "abap_cls_lcl_h"}
+    assert _contains(result, "abap_incl_zdemo_f01") == {("abap_incl_zdemo_f01", c) for c in children}
+    assert _contains(result, file_nid) == {(file_nid, c) for c in children | {"abap_incl_zdemo_f01"}}
+    assert ("abap_cls_lcl_h", "abap_method_lcl_h_run") in _contains(result)
+
+
+def test_main_program_gets_no_anchor_edges_but_fugr_include_does(tmp_path):
+    main = extract_abap(_write(tmp_path, "zdemo.prog.abap", "REPORT zdemo.\nFORM f.\nENDFORM.\n"))
+    assert not [e for e in main["edges"] if e["source"].startswith("abap_incl_")]
+    f = _write(tmp_path, "zfg.fugr.lzfgf01.abap", "FORM g.\nENDFORM.\n")
+    assert {t for _, t in _contains(extract_abap(f), "abap_incl_lzfgf01")} == {_make_id(_file_stem(f), "G")}
+
+
+def test_report_reaches_forms_and_classes_of_several_includes_in_two_hops(tmp_path):
+    import networkx as nx
+    from graphify.extract import extract
+    from graphify.build import build_from_json
+    main = _write(tmp_path, "zdemo.prog.abap", "REPORT zdemo.\nINCLUDE zdemo_top.\nINCLUDE zdemo_f01.\nINCLUDE zdemo_f02.\n")
+    top = _write(tmp_path, "zdemo_top.prog.abap", "DATA gv_x TYPE i.\n")
+    f01 = _write(tmp_path, "zdemo_f01.prog.abap", "FORM do_a.\nENDFORM.\nFORM do_b.\nENDFORM.\n")
+    f02 = _write(tmp_path, "zdemo_f02.prog.abap", "FORM do_c.\nENDFORM.\n" + LOCAL_CLASS)
+    G = build_from_json(extract([main, top, f01, f02], cache_root=tmp_path))
+    prog = next(n for n, d in G.nodes(data=True) if d.get("label") == "REPORT ZDEMO")
+
+    def dist(label):
+        return nx.shortest_path_length(G, prog, next(n for n, d in G.nodes(data=True) if d.get("label") == label))
+
+    assert [dist("FORM DO_A"), dist("FORM DO_B"), dist("FORM DO_C"), dist("CLASS LCL_H DEFINITION")] == [2, 2, 2, 2]
+    assert dist("LCL_H->RUN") == 3
+
+
+def test_perform_without_definition_is_not_linked_from_anchor(tmp_path):
+    result = extract_abap(_write(tmp_path, "zdemo_eve.prog.abap", "PERFORM elsewhere.\n"))
+    assert _contains(result, "abap_incl_zdemo_eve") == set()
+
+
+def test_include_anchor_not_dead_and_same_file_class_still_dead(tmp_path):
+    from graphify.extract import extract
+    from graphify.build import build_from_json, mark_dead_candidates
+    inc = _write(tmp_path, "zdemo_cl0.prog.abap",
+                 "CLASS zcl_loc DEFINITION.\n  PUBLIC SECTION.\n    METHODS run.\nENDCLASS.\n"
+                 "CLASS zcl_loc IMPLEMENTATION.\n  METHOD run.\n  ENDMETHOD.\nENDCLASS.\n")
+    G = build_from_json(extract([inc], cache_root=tmp_path))
+    mark_dead_candidates(G)
+    assert G.nodes["abap_cls_zcl_loc"].get("dead_candidate")
+    assert not G.nodes["abap_incl_zdemo_cl0"].get("dead_candidate")

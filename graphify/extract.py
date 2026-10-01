@@ -11586,11 +11586,13 @@ def extract_abap(path: Path) -> dict:
 
     Nodes: CLASS DEFINITION/IMPLEMENTATION, METHOD, INTERFACE, FUNCTION GROUP,
            FUNCTION (module), FORM, REPORT.
-    Edges: contains (file→scope→child) and calls (CALL FUNCTION EXTRACTED,
+    Edges: contains (file→scope→child; an include's anchor node also holds its
+           top-level definitions) and calls (CALL FUNCTION EXTRACTED,
            PERFORM and static ZCL=>method INFERRED, SUBMIT EXTRACTED),
            selects_from / writes_to (Open SQL, scope -> ddic_tabl_<table> stub;
            see _abap_sql_table_refs), includes (INCLUDE <name>. -> abap_incl_<name>;
-           an include file also defines that node, see _abap_include_refs).
+           an include file also defines that node and contains its top-level
+           definitions, see _abap_include_refs).
     IDs are deterministic: derived from object names, not byte offsets.
     """
     try:
@@ -12040,6 +12042,11 @@ def extract_abap(path: Path) -> dict:
         top_nid = _make_id("abap_incl", incl_name)
         _ensure(top_nid, f"INCLUDE {incl_name}", 1, _include_kind(incl_name))
         _contains_edge(file_nid, top_nid)
+        # Top-level definitions also hang from the include node, so REPORT -> include -> FORM
+        # is 2 hops (they keep their file -> child edge).
+        for e in [e for e in edges if e["relation"] == "contains"
+                  and e["source"] == file_nid and e["target"] != top_nid]:
+            _contains_edge(top_nid, e["target"])
     for off, iname in _abap_include_refs(source):
         idx = bisect.bisect_right(scope_starts, off) - 1
         src = scopes[idx][2] if idx >= 0 and off < scopes[idx][1] else (top_nid or file_nid)

@@ -90,7 +90,7 @@ Parses `.abap` files using tree-sitter-abap (local fork at `../8 - tree-sitter-a
 
 | Relation | Confidence | Trigger |
 |---|---|---|
-| `contains` | `EXTRACTED` | file→class, class→method/event, file→FM/FG/interface/form |
+| `contains` | `EXTRACTED` | file→class, class→method/event, file→FM/FG/interface/form; in include files the `abap_incl_*` node also contains the file's top-level definitions (REPORT→include→FORM = 2 hops) |
 | `calls` | `EXTRACTED` | `CALL FUNCTION "..."`, `call_badi_statement` |
 | `calls` | `INFERRED` | method `->` / `=>` call, `PERFORM`, `CALL METHOD` |
 | `submits` | `EXTRACTED` | `SUBMIT <prog>` (static, Z/Y only; dynamic skipped) |
